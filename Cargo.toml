@@ -41,6 +41,8 @@ tauri-plugin-shell = "2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 rodio = "0.20"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 directories = "5.0"
 image = "0.25"
 open = "5.0"

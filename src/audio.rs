@@ -1,4 +1,18 @@
+//! Audio device control and feedback playback.
+//!
+//! This module provides [`AudioController`] for managing microphone mute state
+//! and audio feedback (beeps/custom sounds). It uses Windows Core Audio APIs
+//! via COM interfaces.
+//!
+//! # Example
+//! ```no_run
+//! let controller = AudioController::new(None)?;
+//! let is_muted = controller.is_muted()?;
+//! controller.set_mute(true, &config)?;
+//! ```
+
 use crate::config::AppConfig;
+use crate::constants::AUDIO_CLIENT_BUFFER_DURATION_100NS;
 use rodio::{OutputStream, OutputStreamHandle, Sink, Source, source::SineWave};
 use std::fs::File;
 use std::io::{BufReader, Cursor};
@@ -17,21 +31,32 @@ use windows::core::Result;
 const MUTE_WAV: &[u8] = include_bytes!("../ui/assets/mute.wav");
 const UNMUTE_WAV: &[u8] = include_bytes!("../ui/assets/unmute.wav");
 
+/// Manages audio device control including mute state and peak metering.
+///
+/// This struct holds COM interfaces to the Windows Core Audio APIs.
+/// The [`device`] and [`audio_client`] fields are kept alive to maintain
+/// COM references required by the [`volume`] and [`meter`] interfaces.
 pub struct AudioController {
-    #[allow(dead_code)]
-    device: IMMDevice,
+    /// Kept alive to maintain COM reference, but not accessed directly
+    /// after construction. Volume and meter interfaces depend on this.
+    _device: IMMDevice,
     volume: IAudioEndpointVolume,
     meter: IAudioMeterInformation,
-    #[allow(dead_code)]
-    audio_client: Option<IAudioClient>,
+    /// Audio client must be kept alive to maintain hardware streaming
+    /// for peak meter readings.
+    _audio_client: Option<IAudioClient>,
     _stream: OutputStream,
     stream_handle: OutputStreamHandle,
 }
 
 impl AudioController {
     pub fn new(device_id: Option<&String>) -> Result<Self> {
-        let (_stream, stream_handle) = OutputStream::try_default()
-            .expect("Failed to get default audio output device for feedback");
+        let (_stream, stream_handle) = OutputStream::try_default().map_err(|e| {
+            windows::core::Error::new(
+                windows::Win32::Foundation::E_FAIL,
+                format!("Failed to initialize audio output: {}", e),
+            )
+        })?;
 
         unsafe {
             // Ensure COM is initialized for the thread
@@ -57,14 +82,14 @@ impl AudioController {
                     // Initialize and Start the client so the hardware starts feeding meter data
                     // AUDCLNT_SHAREMODE_SHARED = 0
                     if client
-                        .Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 10000000, 0, fmt, None)
+                        .Initialize(AUDCLNT_SHAREMODE_SHARED, 0, AUDIO_CLIENT_BUFFER_DURATION_100NS, 0, fmt, None)
                         .is_ok()
                     {
                         if client.Start().is_ok() {
                             audio_client = Some(client);
                         }
                     } else {
-                        eprintln!("[ERROR] Failed to initialize AudioClient");
+                        tracing::error!("Failed to initialize AudioClient");
                     }
                     windows::Win32::System::Com::CoTaskMemFree(Some(
                         fmt as *const _ as *const std::ffi::c_void,
@@ -73,10 +98,10 @@ impl AudioController {
             }
 
             Ok(Self {
-                device,
+                _device: device,
                 volume,
                 meter,
-                audio_client,
+                _audio_client: audio_client,
                 _stream,
                 stream_handle,
             })
@@ -85,7 +110,7 @@ impl AudioController {
 
     pub fn is_muted(&self) -> Result<bool> {
         let muted = unsafe { self.volume.GetMute() }.map_err(|e| {
-            eprintln!("[ERROR] GetMute failed: {:?}", e);
+            tracing::error!(error = ?e, "GetMute failed");
             e
         })?;
         Ok(muted.as_bool())
@@ -94,7 +119,7 @@ impl AudioController {
     pub fn set_mute(&self, mute: bool, config: &AppConfig) -> Result<String> {
         let mut debug_msg = String::new();
         if let Err(e) = unsafe { self.volume.SetMute(mute, std::ptr::null()) } {
-            eprintln!("[ERROR] Failed to set mute state: {:?}", e);
+            tracing::error!(error = ?e, mute = mute, "Failed to set mute state");
             return Err(e);
         }
         debug_msg.push_str(&format!("Muted Main: {}; ", mute));
@@ -128,9 +153,10 @@ impl AudioController {
                                             {
                                                 if let Err(e) = vol.SetMute(mute, std::ptr::null())
                                                 {
-                                                    eprintln!(
-                                                        "[ERROR] Failed to set mute state for sync device {}: {:?}",
-                                                        id_string, e
+                                                    tracing::error!(
+                                                        device_id = %id_string,
+                                                        error = ?e,
+                                                        "Failed to set mute state for sync device"
                                                     );
                                                 } else {
                                                     debug_msg.push_str(&format!(
@@ -161,7 +187,7 @@ impl AudioController {
 
     pub fn get_peak_value(&self) -> Result<f32> {
         let peak = unsafe { self.meter.GetPeakValue() }.map_err(|e| {
-            eprintln!("[ERROR] GetPeakValue failed: {:?}", e);
+            tracing::error!(error = ?e, "GetPeakValue failed");
             e
         })?;
         Ok(peak)
@@ -244,15 +270,15 @@ pub fn play_feedback(stream_handle: &OutputStreamHandle, is_muted: bool, config:
                         sink.append(source);
                         sink.detach();
                     } else {
-                        eprintln!("[ERROR] Failed to decode audio file: {:?}", valid_path);
+                        tracing::error!(path = ?valid_path, "Failed to decode audio file");
                     }
                 } else {
-                    eprintln!("[ERROR] Failed to open audio file: {:?}", valid_path);
+                    tracing::error!(path = ?valid_path, "Failed to open audio file");
                 }
             } else {
-                eprintln!(
-                    "[ERROR] Audio file not found: {}. Using embedded fallback.",
-                    sound_cfg_file
+                tracing::error!(
+                    file = %sound_cfg_file,
+                    "Audio file not found, using embedded fallback"
                 );
 
                 let bytes = if key == "mute" { MUTE_WAV } else { UNMUTE_WAV };

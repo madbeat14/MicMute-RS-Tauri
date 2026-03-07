@@ -1,3 +1,9 @@
+//! Tauri command handlers for the MicMuteRs application.
+//!
+//! This module contains all the command functions exposed to the frontend
+//! via Tauri's IPC system. These commands handle audio control, configuration
+//! management, and system integration.
+
 use serde::Serialize;
 use std::sync::Arc;
 use tauri::State;
@@ -29,9 +35,10 @@ pub async fn get_state(state: State<'_, Arc<AppState>>) -> Result<AppStateDto, S
     let is_muted = *state.is_muted.lock().unwrap();
     let peak = state.audio.lock().unwrap().get_peak_value().unwrap_or(0.0);
     if peak > 0.0001 {
-        eprintln!(
-            "[DEBUG] get_state: peak_level={:.6}, is_muted={}",
-            peak, is_muted
+        tracing::debug!(
+            peak_level = peak,
+            is_muted = is_muted,
+            "get_state called with significant peak level"
         );
     }
     Ok(AppStateDto {
@@ -119,19 +126,15 @@ pub async fn update_config(
     state: State<'_, Arc<AppState>>,
     payload: String,
 ) -> Result<(), String> {
-    eprintln!(
-        "update_config called. Raw payload length: {}",
-        payload.len()
-    );
+    tracing::debug!(payload_len = payload.len(), "update_config called");
     let new_config: config::AppConfig = match serde_json::from_str(&payload) {
         Ok(cfg) => {
-            eprintln!("Deserialization successful.");
+            tracing::debug!("Config deserialization successful");
             cfg
         }
         Err(e) => {
-            let err_msg = format!("Config deserialization failed: {}", e);
-            eprintln!("ERROR: {}", err_msg);
-            return Err(err_msg);
+            tracing::error!(error = %e, "Config deserialization failed");
+            return Err(format!("Config deserialization failed: {}", e));
         }
     };
     new_config.save();

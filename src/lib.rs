@@ -2,11 +2,14 @@ pub mod audio;
 pub mod com_interfaces;
 pub mod commands;
 pub mod config;
+pub mod constants;
 pub mod hotkey;
 pub mod startup;
 pub mod utils;
 
+use crate::constants::DEFAULT_HOTKEY_VK;
 use std::sync::{Arc, Mutex};
+use tracing;
 use tauri::{
     AppHandle, Emitter, Manager,
     image::Image,
@@ -25,10 +28,16 @@ pub struct AppState {
     pub available_devices: Mutex<Vec<(String, String)>>,
 }
 
-// SAFETY: All mutable access is serialized through Mutex.
-// Windows COM interfaces (IMMDevice, etc.) and rodio OutputStream
-// are not auto-Send, but we only ever access them behind a Mutex
-// from a single Windows process, so this is safe in practice.
+/// # Safety Invariants
+///
+/// 1. All COM interfaces are accessed only from the main thread (STA)
+/// 2. `OutputStream` is created on the main thread and never moved
+/// 3. The `rodio` `OutputStream` is not Send, but we ensure it's only
+///    accessed through the Mutex on the thread that created it
+/// 4. All Windows messages are processed on the main thread
+///
+/// Violating these invariants could lead to COM threading errors or
+/// audio playback issues.
 unsafe impl Send for AppState {}
 unsafe impl Sync for AppState {}
 
@@ -128,7 +137,9 @@ pub fn load_tray_icon(is_muted: bool, is_light: bool) -> Image<'static> {
         (true, false) => include_bytes!("../ui/assets/mic_muted_white.ico"),
         (false, false) => include_bytes!("../ui/assets/mic_white.ico"),
     };
-    Image::from_bytes(bytes).expect("failed to load tray icon")
+    // SAFETY: include_bytes! is compile-time verified, so this should never fail.
+    // Using unwrap() here because a failure indicates a build/packaging issue.
+    Image::from_bytes(bytes).expect("included tray icon bytes should always be valid")
 }
 
 // ─────────────────────────────────────────
@@ -149,11 +160,30 @@ pub fn emit_state(app: &AppHandle, is_muted: bool, peak: f32) {
 // ─────────────────────────────────────────
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // ── Initialize logging ──
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+        )
+        .with_target(true)
+        .init();
+
+    tracing::info!("Starting MicMuteRs application");
+
     // ── Pre-initialize state BEFORE Tauri builder to prevent IPC race conditions ──
     let cfg = config::AppConfig::load();
-    let audio_ctrl = audio::AudioController::new(cfg.device_id.as_ref())
-        .or_else(|_| audio::AudioController::new(None))
-        .expect("Failed to initialize audio controller");
+    let audio_ctrl = match audio::AudioController::new(cfg.device_id.as_ref())
+        .or_else(|e| {
+            tracing::error!(error = ?e, "Failed to initialize configured audio device, falling back to default");
+            audio::AudioController::new(None)
+        }) {
+        Ok(ctrl) => ctrl,
+        Err(e) => {
+            tracing::error!(error = ?e, "Failed to initialize any audio controller");
+            std::process::exit(1);
+        }
+    };
 
     let is_muted = audio_ctrl.is_muted().unwrap_or(false);
     let devices = audio::get_audio_devices().unwrap_or_default();
@@ -182,7 +212,7 @@ pub fn run() {
         }
     }
     if initial_vks.is_empty() {
-        initial_vks.push(0xB3);
+        initial_vks.push(DEFAULT_HOTKEY_VK);
     }
     let hotkey_mgr = hotkey::HotkeyManager::new(initial_vks);
 
@@ -384,7 +414,7 @@ pub fn run() {
             commands::open_url,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .expect("fatal error while running tauri application");
 }
 
 // ─────────────────────────────────────────

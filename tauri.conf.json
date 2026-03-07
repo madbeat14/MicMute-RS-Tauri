@@ -53,7 +53,7 @@
         ],
         "withGlobalTauri": true,
         "security": {
-            "csp": null
+            "csp": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; media-src 'self'"
         }
     },
     "bundle": {
