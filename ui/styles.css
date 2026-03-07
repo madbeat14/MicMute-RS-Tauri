@@ -511,13 +511,15 @@ body {
 }
 
 .vu-dot {
-  width: 10px;
-  height: 10px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
-  background: transparent;
-  margin-left: 4px;
-  transition: background .15s;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  margin-left: 10px;
+  transition: all .15s ease;
   pointer-events: none;
+  flex-shrink: 0;
 }
 
 .vu-dot.active {

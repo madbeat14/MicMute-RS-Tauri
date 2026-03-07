@@ -52,23 +52,33 @@ function updateIcon() {
     const dot = document.getElementById("vu-dot");
     if (dot) {
         dot.style.display = config.persistent_overlay.show_vu ? "block" : "none";
+        // Re-check polling if not already running
+        if (config.persistent_overlay.show_vu && !vuPollTimer) {
+            startVuPoll();
+        }
     }
 }
 
-async function startVuPoll() {
-    if (!config?.persistent_overlay?.show_vu) return;
-    setInterval(async () => {
+function startVuPoll() {
+    if (vuPollTimer) clearInterval(vuPollTimer);
+
+    vuPollTimer = setInterval(async () => {
+        const dot = document.getElementById("vu-dot");
+        if (!dot) return;
+
         if (!config?.persistent_overlay?.show_vu || isMuted) {
-            document.getElementById("vu-dot")?.classList.remove("active");
+            dot.classList.remove("active");
             return;
         }
+
         try {
             const s = await invoke("get_state");
+            // Sensitivity 1-100 logic: lower value = more sensitive? 
+            // Actually let's make it a direct threshold where 1 is hyper-sensitive and 100 is deaf.
             const threshold = (config.persistent_overlay.sensitivity ?? 5) / 100;
-            const dot = document.getElementById("vu-dot");
-            if (dot) dot.classList.toggle("active", s.peak_level > threshold);
+            dot.classList.toggle("active", s.peak_level > threshold);
         } catch (_) { }
-    }, 80);
+    }, 60);
 }
 
 window.addEventListener("DOMContentLoaded", init);

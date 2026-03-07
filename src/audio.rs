@@ -63,6 +63,8 @@ impl AudioController {
                         if client.Start().is_ok() {
                             audio_client = Some(client);
                         }
+                    } else {
+                        eprintln!("[ERROR] Failed to initialize AudioClient");
                     }
                     windows::Win32::System::Com::CoTaskMemFree(Some(
                         fmt as *const _ as *const std::ffi::c_void,
