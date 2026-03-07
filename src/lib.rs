@@ -158,6 +158,15 @@ pub fn run() {
                     api.prevent_close();
                 }
             }
+            tauri::WindowEvent::Focused(true) => {
+                if win.label() == "settings" {
+                    if let Some(state) = win.try_state::<Arc<AppState>>() {
+                        if let Ok(hotkeys) = state.hotkeys.lock() {
+                            hotkeys.reinstall_hook();
+                        }
+                    }
+                }
+            }
             _ => {}
         })
         .setup(|app| {
@@ -383,30 +392,56 @@ pub fn run() {
 pub fn do_toggle_mute(app: &AppHandle) {
     let state: tauri::State<Arc<AppState>> = app.state();
     let cfg = state.config.lock().unwrap().clone();
-    // Use blocking .lock() instead of try_lock() so that rapid consecutive
-    // hotkey presses are never silently dropped due to a momentarily held lock.
-    let audio = state.audio.lock().unwrap();
-    if let Ok((muted, _debug)) = audio.toggle_mute(&cfg) {
-        drop(audio);
-        *state.is_muted.lock().unwrap() = muted;
-        let peak = state.audio.lock().unwrap().get_peak_value().unwrap_or(0.0);
-        update_tray_icon(app, muted);
-        emit_state(app, muted, peak);
-        trigger_osd(app, muted);
+
+    let (success_m, peak, stream_handle) = {
+        let audio = state.audio.lock().unwrap();
+        if let Ok((m, _debug)) = audio.toggle_mute(&cfg) {
+            let p = audio.get_peak_value().unwrap_or(0.0);
+            (Some(m), p, Some(audio.stream_handle()))
+        } else {
+            (None, 0.0, None)
+        }
+    };
+
+    if let Some(m) = success_m {
+        *state.is_muted.lock().unwrap() = m;
+        update_tray_icon(app, m);
+        emit_state(app, m, peak);
+        trigger_osd(app, m);
+
+        if let Some(sh) = stream_handle {
+            std::thread::spawn(move || {
+                audio::play_feedback(&sh, m, &cfg);
+            });
+        }
     }
 }
 
 pub fn do_set_mute(app: &AppHandle, mute: bool) {
     let state: tauri::State<Arc<AppState>> = app.state();
     let cfg = state.config.lock().unwrap().clone();
-    let audio = state.audio.lock().unwrap();
-    if audio.set_mute(mute, &cfg).is_ok() {
-        drop(audio);
+
+    let (success, peak, stream_handle) = {
+        let audio = state.audio.lock().unwrap();
+        if audio.set_mute(mute, &cfg).is_ok() {
+            let p = audio.get_peak_value().unwrap_or(0.0);
+            (true, p, Some(audio.stream_handle()))
+        } else {
+            (false, 0.0, None)
+        }
+    };
+
+    if success {
         *state.is_muted.lock().unwrap() = mute;
-        let peak = state.audio.lock().unwrap().get_peak_value().unwrap_or(0.0);
         update_tray_icon(app, mute);
         emit_state(app, mute, peak);
         trigger_osd(app, mute);
+
+        if let Some(sh) = stream_handle {
+            std::thread::spawn(move || {
+                audio::play_feedback(&sh, mute, &cfg);
+            });
+        }
     }
 }
 

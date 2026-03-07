@@ -41,14 +41,22 @@ pub async fn toggle_mute(
     state: State<'_, Arc<AppState>>,
 ) -> Result<AppStateDto, String> {
     let cfg = state.config.lock().unwrap().clone();
-    let audio = state.audio.lock().unwrap();
-    let (muted, _) = audio.toggle_mute(&cfg).map_err(|e| e.to_string())?;
-    drop(audio);
+    let (muted, peak, stream_handle) = {
+        let audio = state.audio.lock().unwrap();
+        let (m, _) = audio.toggle_mute(&cfg).map_err(|e| e.to_string())?;
+        let p = audio.get_peak_value().unwrap_or(0.0);
+        let sh = audio.stream_handle();
+        (m, p, sh)
+    };
     *state.is_muted.lock().unwrap() = muted;
-    let peak = state.audio.lock().unwrap().get_peak_value().unwrap_or(0.0);
     crate::update_tray_icon(&app, muted);
     crate::emit_state(&app, muted, peak);
     crate::trigger_osd(&app, muted);
+
+    std::thread::spawn(move || {
+        crate::audio::play_feedback(&stream_handle, muted, &cfg);
+    });
+
     Ok(AppStateDto {
         is_muted: muted,
         peak_level: peak,
@@ -63,19 +71,33 @@ pub async fn set_mute(
     muted: bool,
 ) -> Result<AppStateDto, String> {
     let cfg = state.config.lock().unwrap().clone();
-    let audio = state.audio.lock().unwrap();
-    audio.set_mute(muted, &cfg).map_err(|e| e.to_string())?;
-    audio.play_feedback(muted, &cfg);
-    drop(audio);
-    *state.is_muted.lock().unwrap() = muted;
-    let peak = state.audio.lock().unwrap().get_peak_value().unwrap_or(0.0);
-    crate::update_tray_icon(&app, muted);
-    crate::emit_state(&app, muted, peak);
-    crate::trigger_osd(&app, muted);
-    Ok(AppStateDto {
-        is_muted: muted,
-        peak_level: peak,
-    })
+    let (success, peak, stream_handle) = {
+        let audio = state.audio.lock().unwrap();
+        if audio.set_mute(muted, &cfg).is_ok() {
+            let p = audio.get_peak_value().unwrap_or(0.0);
+            (true, p, audio.stream_handle())
+        } else {
+            (false, 0.0, audio.stream_handle())
+        }
+    };
+
+    if success {
+        *state.is_muted.lock().unwrap() = muted;
+        crate::update_tray_icon(&app, muted);
+        crate::emit_state(&app, muted, peak);
+        crate::trigger_osd(&app, muted);
+
+        std::thread::spawn(move || {
+            crate::audio::play_feedback(&stream_handle, muted, &cfg);
+        });
+
+        Ok(AppStateDto {
+            is_muted: muted,
+            peak_level: peak,
+        })
+    } else {
+        Err("Failed to set mute".to_string())
+    }
 }
 
 /// Get full config.

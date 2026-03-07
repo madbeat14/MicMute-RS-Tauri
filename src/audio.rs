@@ -156,7 +156,6 @@ impl AudioController {
         let new_state = !current;
         let mut debug = self.set_mute(new_state, config)?;
         debug.push_str(&format!("Current is_muted() reads: {}", new_state));
-        self.play_feedback(new_state, config);
         Ok((new_state, debug))
     }
 
@@ -168,106 +167,109 @@ impl AudioController {
         Ok(peak)
     }
 
-    pub fn play_feedback(&self, is_muted: bool, config: &AppConfig) {
-        if !config.beep_enabled {
-            return;
-        }
+    pub fn stream_handle(&self) -> OutputStreamHandle {
+        self.stream_handle.clone()
+    }
+}
 
-        let key = if is_muted { "mute" } else { "unmute" };
+pub fn play_feedback(stream_handle: &OutputStreamHandle, is_muted: bool, config: &AppConfig) {
+    if !config.beep_enabled {
+        return;
+    }
 
-        if config.audio_mode == "beep" {
-            if let Some(beep_cfg) = config.beep_mode_configs.get(key) {
-                let sink = Sink::try_new(&self.stream_handle).unwrap();
-                for _ in 0..beep_cfg.count {
-                    let source = SineWave::new(beep_cfg.freq as f32)
-                        .take_duration(Duration::from_millis(beep_cfg.duration as u64))
-                        .amplify(0.2);
-                    sink.append(source);
-                }
-                sink.detach();
+    let key = if is_muted { "mute" } else { "unmute" };
+
+    if config.audio_mode == "beep" {
+        if let Some(beep_cfg) = config.beep_mode_configs.get(key) {
+            let sink = Sink::try_new(stream_handle).unwrap();
+            for _ in 0..beep_cfg.count {
+                let source = SineWave::new(beep_cfg.freq as f32)
+                    .take_duration(Duration::from_millis(beep_cfg.duration as u64))
+                    .amplify(0.2);
+                sink.append(source);
             }
-        } else {
-            // "custom" mode
-            if let Some(sound_cfg) = config.sound_mode_configs.get(key) {
-                let mut path_found = None;
-                let sound_cfg_file = &sound_cfg.file;
+            sink.detach();
+        }
+    } else {
+        // "custom" mode
+        if let Some(sound_cfg) = config.sound_mode_configs.get(key) {
+            let mut path_found = None;
+            let sound_cfg_file = &sound_cfg.file;
 
-                let p = std::path::PathBuf::from(sound_cfg_file);
-                if p.is_absolute() && p.exists() {
-                    path_found = Some(p);
-                } else {
-                    // Check local assets (Priority for Rust version)
-                    if let Ok(exe_path) = std::env::current_exe() {
-                        if let Some(parent) = exe_path.parent() {
-                            let local_assets =
-                                parent.join("ui").join("assets").join(sound_cfg_file);
-                            if local_assets.exists() {
-                                path_found = Some(local_assets);
-                            }
-                        }
-                    }
-                    if path_found.is_none() {
-                        let cwd_assets = std::env::current_dir()
-                            .unwrap_or_default()
-                            .join("ui")
-                            .join("assets")
-                            .join(sound_cfg_file);
-                        if cwd_assets.exists() {
-                            path_found = Some(cwd_assets);
-                        }
-                    }
-                    if path_found.is_none() {
-                        // Fallback to Python AppData sounds directory
-                        if let Some(proj_dirs) = directories::ProjectDirs::from("", "", "MicMute") {
-                            let appdata_path = proj_dirs
-                                .data_local_dir()
-                                .parent()
-                                .unwrap_or(proj_dirs.data_local_dir())
-                                .join("MicMute")
-                                .join("micmute_sounds")
-                                .join(sound_cfg_file);
-                            if appdata_path.exists() {
-                                path_found = Some(appdata_path);
-                            }
+            let p = std::path::PathBuf::from(sound_cfg_file);
+            if p.is_absolute() && p.exists() {
+                path_found = Some(p);
+            } else {
+                // Check local assets (Priority for Rust version)
+                if let Ok(exe_path) = std::env::current_exe() {
+                    if let Some(parent) = exe_path.parent() {
+                        let local_assets = parent.join("ui").join("assets").join(sound_cfg_file);
+                        if local_assets.exists() {
+                            path_found = Some(local_assets);
                         }
                     }
                 }
-
-                if let Some(valid_path) = path_found {
-                    if let Ok(file) = File::open(&valid_path) {
-                        if let Ok(source) = rodio::Decoder::new(BufReader::new(file)) {
-                            let sink = Sink::try_new(&self.stream_handle).unwrap();
-                            sink.set_volume((sound_cfg.volume as f32) / 100.0);
-                            sink.append(source);
-                            sink.detach();
-                        } else {
-                            eprintln!("[ERROR] Failed to decode audio file: {:?}", valid_path);
-                        }
-                    } else {
-                        eprintln!("[ERROR] Failed to open audio file: {:?}", valid_path);
+                if path_found.is_none() {
+                    let cwd_assets = std::env::current_dir()
+                        .unwrap_or_default()
+                        .join("ui")
+                        .join("assets")
+                        .join(sound_cfg_file);
+                    if cwd_assets.exists() {
+                        path_found = Some(cwd_assets);
                     }
-                } else {
-                    eprintln!(
-                        "[ERROR] Audio file not found: {}. Using embedded fallback.",
-                        sound_cfg_file
-                    );
+                }
+                if path_found.is_none() {
+                    // Fallback to Python AppData sounds directory
+                    if let Some(proj_dirs) = directories::ProjectDirs::from("", "", "MicMute") {
+                        let appdata_path = proj_dirs
+                            .data_local_dir()
+                            .parent()
+                            .unwrap_or(proj_dirs.data_local_dir())
+                            .join("MicMute")
+                            .join("micmute_sounds")
+                            .join(sound_cfg_file);
+                        if appdata_path.exists() {
+                            path_found = Some(appdata_path);
+                        }
+                    }
+                }
+            }
 
-                    let bytes = if key == "mute" { MUTE_WAV } else { UNMUTE_WAV };
-                    if let Ok(source) = rodio::Decoder::new(Cursor::new(bytes)) {
-                        let sink = Sink::try_new(&self.stream_handle).unwrap();
+            if let Some(valid_path) = path_found {
+                if let Ok(file) = File::open(&valid_path) {
+                    if let Ok(source) = rodio::Decoder::new(BufReader::new(file)) {
+                        let sink = Sink::try_new(stream_handle).unwrap();
                         sink.set_volume((sound_cfg.volume as f32) / 100.0);
                         sink.append(source);
                         sink.detach();
                     } else {
-                        // Final fallback to beep if even embedded decode fails (shouldn't happen)
-                        if let Some(beep_cfg) = config.beep_mode_configs.get(key) {
-                            let sink = Sink::try_new(&self.stream_handle).unwrap();
-                            let source = SineWave::new(beep_cfg.freq as f32)
-                                .take_duration(Duration::from_millis(beep_cfg.duration as u64))
-                                .amplify(0.2);
-                            sink.append(source);
-                            sink.detach();
-                        }
+                        eprintln!("[ERROR] Failed to decode audio file: {:?}", valid_path);
+                    }
+                } else {
+                    eprintln!("[ERROR] Failed to open audio file: {:?}", valid_path);
+                }
+            } else {
+                eprintln!(
+                    "[ERROR] Audio file not found: {}. Using embedded fallback.",
+                    sound_cfg_file
+                );
+
+                let bytes = if key == "mute" { MUTE_WAV } else { UNMUTE_WAV };
+                if let Ok(source) = rodio::Decoder::new(Cursor::new(bytes)) {
+                    let sink = Sink::try_new(stream_handle).unwrap();
+                    sink.set_volume((sound_cfg.volume as f32) / 100.0);
+                    sink.append(source);
+                    sink.detach();
+                } else {
+                    // Final fallback to beep if even embedded decode fails (shouldn't happen)
+                    if let Some(beep_cfg) = config.beep_mode_configs.get(key) {
+                        let sink = Sink::try_new(stream_handle).unwrap();
+                        let source = SineWave::new(beep_cfg.freq as f32)
+                            .take_duration(Duration::from_millis(beep_cfg.duration as u64))
+                            .amplify(0.2);
+                        sink.append(source);
+                        sink.detach();
                     }
                 }
             }
