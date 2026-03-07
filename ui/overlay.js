@@ -1,19 +1,30 @@
 // Overlay window logic
+// This script maintains the state and updates the UI for the persistent floating mic status overlay.
+
+// Import Tauri commands and event APIs
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
-let config = null;
-let isMuted = false;
-let vuPollTimer = null;
+// State variables
+let config = null;      // Holds the application configuration
+let isMuted = false;    // Current microphone mute status
+let vuPollTimer = null; // Timer reference for polling the Volume Unit (VU) meter
 
+/**
+ * Initializes the overlay by fetching the initial configuration and state,
+ * subscribing to state updates, and starting the VU meter polling if enabled.
+ */
 async function init() {
     try {
         config = await invoke("get_config");
         const state = await invoke("get_state");
         isMuted = state.is_muted;
+
         updateIcon();
         startVuPoll();
-    } catch (e) { console.error("overlay init:", e); }
+    } catch (e) {
+        console.error("overlay init:", e);
+    }
 
     await listen("state-update", e => {
         isMuted = e.payload.is_muted;
@@ -27,6 +38,10 @@ async function init() {
     }, 2000);
 }
 
+/**
+ * Updates the overlay icon appearance, size, and opacity based on the current configuration,
+ * system theme, and mute status. Also handles the visibility of the VU activity dot.
+ */
 function updateIcon() {
     const icon = document.getElementById("overlay-icon");
     if (!icon || !config) return;
@@ -59,6 +74,11 @@ function updateIcon() {
     }
 }
 
+/**
+ * Starts a polling interval that periodically queries the rust backend for the current 
+ * microphone peak volume level. It will toggle the 'active' class on the VU dot 
+ * if the peak exceeds the user-configured sensitivity threshold.
+ */
 function startVuPoll() {
     if (vuPollTimer) clearInterval(vuPollTimer);
 
@@ -81,4 +101,5 @@ function startVuPoll() {
     }, 60);
 }
 
+// Initialize the overlay script once the DOM is fully loaded.
 window.addEventListener("DOMContentLoaded", init);

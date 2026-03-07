@@ -1,20 +1,25 @@
 // MicMuteRs – Settings Page Logic
-// Uses window.__TAURI__ provided by Tauri
+// Uses window.__TAURI__ provided by Tauri to interact with the rust backend.
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
 // ──────────────────────────────────
-//  State
+//  State variables
 // ──────────────────────────────────
-let config = null;
-let devices = [];
-let isMuted = false;
-let recordingKey = null;
-let recordingPollTimer = null;
-let vuPollTimer = null;
+let config = null;              // Holds the application settings object fetched from rust
+let devices = [];               // Array of available audio devices
+let isMuted = false;            // Current microphone active state
+let recordingKey = null;        // Identifies which hotkey is currently being recorded (e.g. 'toggle' or 'mute')
+let recordingPollTimer = null;  // Interval timer for checking if a new key was recorded
+let vuPollTimer = null;         // Interval timer for the Volume Unit meter in the settings page
 
 let saveTimeout = null;
+
+/**
+ * Debounces the saveConfig function, delaying the save operation 
+ * to prevent excessive write calls to the backend when rapidly changing UI inputs.
+ */
 function debouncedSave() {
     if (saveTimeout) clearTimeout(saveTimeout);
     saveTimeout = setTimeout(saveConfig, 300);
@@ -29,8 +34,13 @@ const COMMON_KEYS = [
 ];
 
 // ──────────────────────────────────
-//  Init
+//  Initialization
 // ──────────────────────────────────
+
+/**
+ * Initializes the settings page. Loads the config, devices list, and mute state.
+ * Sets up all UI bindings, polls, and subscriptions to real-time state updates.
+ */
 async function init() {
     try {
         config = await invoke("get_config");
@@ -50,12 +60,17 @@ async function init() {
 }
 
 // ──────────────────────────────────
-//  Apply config → UI
+//  Configuration to UI synchronization
 // ──────────────────────────────────
+
+/**
+ * Reads the loaded `config` object and updates all UI elements
+ * (checkboxes, sliders, selects, etc.) to reflect the current settings.
+ */
 function applyConfigToUI() {
     if (!config) return;
 
-    // Device
+    // Devices
     rebuildDeviceSelect();
     rebuildSyncList();
 
@@ -103,8 +118,13 @@ function applyConfigToUI() {
 }
 
 // ──────────────────────────────────
-//  Device select
+//  Device Selection Logic
 // ──────────────────────────────────
+
+/**
+ * Rebuilds the primary audio device dropdown menu with options 
+ * fetched from the rust backend. Selects the active configured device.
+ */
 function rebuildDeviceSelect() {
     const sel = document.getElementById("sel-device");
     sel.innerHTML = `<option value="">Default Windows Device</option>`;
@@ -117,6 +137,10 @@ function rebuildDeviceSelect() {
     }
 }
 
+/**
+ * Rebuilds the secondary devices list used for synchronizing mute 
+ * status across multiple microphone inputs.
+ */
 function rebuildSyncList() {
     const container = document.getElementById("sync-list");
     container.innerHTML = "";
@@ -131,8 +155,13 @@ function rebuildSyncList() {
 }
 
 // ──────────────────────────────────
-//  Hotkey rows
+//  Hotkey Configuration Logic
 // ──────────────────────────────────
+
+/**
+ * Dynamically recreates the hotkey rows based on the selected hotkey mode.
+ * e.g., A single row for 'toggle' mode, or two rows for 'mute' and 'unmute' mode.
+ */
 function rebuildHotkeyRows() {
     const container = document.getElementById("hotkey-rows");
     container.innerHTML = "";
@@ -177,6 +206,11 @@ function rebuildHotkeyRows() {
     }
 }
 
+/**
+ * Instructs the Rust backend to start intercepting keypresses to record a new hotkey.
+ * Polls the backend until a new key is successfully recorded.
+ * @param {string} key - The action identifier string (e.g. 'toggle', 'mute').
+ */
 async function startRecording(key) {
     recordingKey = key;
     const btn = document.getElementById(`rec-${key}`);
@@ -199,6 +233,11 @@ async function startRecording(key) {
     }, 100);
 }
 
+/**
+ * Converts a virtual keycode to a human readable name based on the predefined COMMON_KEYS.
+ * @param {number} vk - The virtual keycode
+ * @returns {string} The human readable name or hexadecimal string
+ */
 function vkToName(vk) {
     return COMMON_KEYS.find(([v]) => v === vk)?.[1] ?? `VK_0x${vk.toString(16).toUpperCase().padStart(2, "0")}`;
 }
@@ -206,6 +245,11 @@ function vkToName(vk) {
 // ──────────────────────────────────
 //  Event listeners
 // ──────────────────────────────────
+
+/**
+ * Attaches UI event listeners (clicks, changes, input) to trigger configuration state
+ * changes and interact with the rust backend commands.
+ */
 function setupEventListeners() {
     // Toggle mute button
     document.getElementById("btn-toggle-mute").addEventListener("click", async () => {
@@ -325,8 +369,13 @@ function setupEventListeners() {
 }
 
 // ──────────────────────────────────
-//  Save
+//  Save Configuration
 // ──────────────────────────────────
+
+/**
+ * Pushes the current `config` object state back to the rust backend to be saved to disk
+ * and applied to the running application instances. Shows a temporary debug message on success.
+ */
 async function saveConfig() {
     try {
         await invoke("update_config", { newConfig: config });
@@ -337,8 +386,13 @@ async function saveConfig() {
 }
 
 // ──────────────────────────────────
-//  UI helpers
+//  UI DOM Helpers
 // ──────────────────────────────────
+
+/**
+ * Updates the text and style of the mute status badge and toggle button.
+ * @param {boolean} muted - Active mute state
+ */
 function updateMuteUI(muted) {
     const badge = document.getElementById("mute-status");
     const btn = document.getElementById("btn-toggle-mute");
@@ -347,11 +401,19 @@ function updateMuteUI(muted) {
     btn.textContent = muted ? "🔇" : "🎤";
 }
 
+/**
+ * Updates the width of the Volume Unit (VU) meter bar.
+ * @param {number} peak - The peak audio volume between 0.0 and 1.0
+ */
 function updateVU(peak) {
     const bar = document.getElementById("vu-bar");
     if (bar) bar.style.width = Math.min(100, peak * 300) + "%";
 }
 
+/**
+ * Starts an interval timer to constantly poll the backend for the current peak volume
+ * level while the settings page is open to animate the VU bar.
+ */
 function startVuPoll() {
     vuPollTimer = setInterval(async () => {
         try {
@@ -361,6 +423,12 @@ function startVuPoll() {
     }, 100);
 }
 
+/**
+ * Synchronizes an HTML range slider value with its adjacent text label.
+ * @param {string} id - HTML ID of the `<input type="range">`
+ * @param {number} value - Background config value
+ * @param {string} labelId - HTML ID of the `<span>` showing the value
+ */
 function setSlider(id, value, labelId) {
     const el = document.getElementById(id);
     const lbl = document.getElementById(labelId);
@@ -368,12 +436,24 @@ function setSlider(id, value, labelId) {
     if (lbl) lbl.textContent = value;
 }
 
+/**
+ * Sets the active option in an HTML `<select>` element.
+ * @param {string} id - HTML ID of the select element
+ * @param {string} value - Value to select
+ */
 function setSelect(id, value) {
     const el = document.getElementById(id);
     if (!el) return;
     [...el.options].forEach(o => { o.selected = o.value === value; });
 }
 
+/**
+ * Binds an HTML range slider to automatically update its text label and invoke 
+ * a callback whenever the user scrubs the slider thumb.
+ * @param {string} sliderId - HTML ID of the `<input type="range">`
+ * @param {string} labelId - HTML ID of the `<span>` to update
+ * @param {function} onValue - Callback invoked with the integer value when changed
+ */
 function bindSlider(sliderId, labelId, onValue) {
     const el = document.getElementById(sliderId);
     const lbl = document.getElementById(labelId);
@@ -386,6 +466,11 @@ function bindSlider(sliderId, labelId, onValue) {
     });
 }
 
+/**
+ * Visually enables or disables a block of options depending on a master checkbox state.
+ * @param {string} checkId - HTML ID of the master checkbox
+ * @param {string} optionsId - HTML ID of the container element representing the children options
+ */
 function updateSubOptions(checkId, optionsId) {
     const chk = document.getElementById(checkId);
     const opts = document.getElementById(optionsId);
@@ -394,10 +479,18 @@ function updateSubOptions(checkId, optionsId) {
     opts.style.pointerEvents = chk.checked ? "auto" : "none";
 }
 
+/**
+ * Toggles the expanded/collapsed CSS class state of an accordion section.
+ * @param {string} sectionId - HTML ID of the section wrapper
+ */
 function toggleSection(sectionId) {
     document.getElementById(sectionId).classList.toggle("collapsed");
 }
 
+/**
+ * Prints a temporary message to the debug status label at the bottom of the window.
+ * @param {string} msg - Resulting message
+ */
 function showDebug(msg) {
     const el = document.getElementById("debug-msg");
     if (el) el.textContent = msg;

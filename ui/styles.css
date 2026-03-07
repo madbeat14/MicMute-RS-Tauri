@@ -3,27 +3,44 @@
    ════════════════════════════════ */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
+/* ── GLOBAL THEME VARIABLES ──────────────────── */
+/* These variables control the color palette, fonts, spacing, shadows, and transitions */
 :root {
   --bg-base: #0e0e14;
+  /* Main application background */
   --bg-card: #16161f;
+  /* Background for individual setting cards */
   --bg-hover: #1e1e2a;
+  /* Button and row hover states */
   --bg-input: #1c1c28;
+  /* Input fields background */
   --border: #2a2a3c;
+  /* Standard border color */
   --accent: #6c63ff;
+  /* Primary purple accent */
   --accent-glow: rgba(108, 99, 255, .25);
+  /* Box shadow glow for accent elements */
   --accent-2: #00d4aa;
+  /* Secondary teal accent (used in VU meter) */
   --success: #22c55e;
+  /* Green for active states */
   --danger: #f87171;
+  /* Red for muted/recording states */
   --text-1: #f1f1f8;
+  /* Primary text */
   --text-2: #9a9ab0;
+  /* Secondary text (subtitles, standard buttons) */
   --text-3: #5c5c78;
+  /* Tertiary text (hints, inactive paths) */
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 16px;
   --shadow: 0 4px 24px rgba(0, 0, 0, .5);
   --transition: all .18s ease;
+  /* Standard rapid transition */
 }
 
+/* Basic reset for all elements */
 *,
 *::before,
 *::after {
@@ -32,6 +49,7 @@
   padding: 0;
 }
 
+/* Global document defaults */
 html,
 body {
   font-family: 'Inter', system-ui, sans-serif;
@@ -44,7 +62,9 @@ body {
   scrollbar-color: var(--border) transparent;
 }
 
-/* ── SETTINGS PAGE ─────────────────── */
+/* ── SETTINGS PAGE LAYOUT ──────────────────── */
+/* The main wrapper uses flex column to pin the header to top, footer to bottom, 
+   and allows the center content to scroll */
 .settings-page {
   display: flex;
   flex-direction: column;
@@ -77,6 +97,7 @@ body {
   letter-spacing: .5px;
 }
 
+/* Status Bar & VU Meter under the header title */
 .status-bar {
   display: flex;
   align-items: center;
@@ -104,6 +125,7 @@ body {
   color: var(--success);
 }
 
+/* Progress bar container for the VU Meter */
 .vu-bar-container {
   flex: 1;
   max-width: 80px;
@@ -119,8 +141,10 @@ body {
   background: linear-gradient(90deg, var(--accent-2), var(--success));
   border-radius: 99px;
   transition: width .08s linear;
+  /* Fast transition for audio updates */
 }
 
+/* Utility layout blocks */
 .btn-icon {
   background: var(--bg-hover);
   border: 1px solid var(--border);
@@ -142,7 +166,7 @@ body {
   box-shadow: 0 0 12px var(--accent-glow);
 }
 
-/* Main scroll area */
+/* Main scrollable area */
 .settings-content {
   flex: 1;
   overflow-y: auto;
@@ -152,7 +176,9 @@ body {
   gap: 8px;
 }
 
-/* Cards */
+/* ── UI COMPONENTS ──────────────────── */
+
+/* Setting Cards: Expandable accordion blocks */
 .card {
   background: var(--bg-card);
   border: 1px solid var(--border);
@@ -186,6 +212,7 @@ body {
   transition: transform .2s;
 }
 
+/* Accordion collapse logic */
 .card.collapsed .card-header .chevron {
   transform: rotate(-90deg);
 }
@@ -199,7 +226,7 @@ body {
   border-top: 1px solid var(--border);
 }
 
-/* Inputs */
+/* Select Dropdown styling */
 .select-input {
   width: 100%;
   background: var(--bg-input);
@@ -218,6 +245,7 @@ body {
   box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
+/* Custom HTML Range Slider */
 .slider {
   -webkit-appearance: none;
   appearance: none;
@@ -229,6 +257,7 @@ body {
   margin-top: 4px;
 }
 
+/* Slider thumb grabber */
 .slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
@@ -245,7 +274,7 @@ body {
   transform: scale(1.25);
 }
 
-/* Toggle + Row styles */
+/* Custom Toggle switch (replaces native checkbox) */
 .toggle-row {
   display: flex;
   align-items: center;
@@ -255,6 +284,7 @@ body {
   color: var(--text-1);
 }
 
+/* iOS style pill background */
 .toggle-switch {
   position: relative;
   appearance: none;
@@ -268,6 +298,7 @@ body {
   flex-shrink: 0;
 }
 
+/* Toggle dot */
 .toggle-switch::after {
   content: '';
   position: absolute;
@@ -280,12 +311,14 @@ body {
   transition: var(--transition);
 }
 
+/* Active toggle state */
 .toggle-switch:checked {
   background: var(--accent);
   border-color: var(--accent);
   box-shadow: 0 0 8px var(--accent-glow);
 }
 
+/* Push toggle dot to the right */
 .toggle-switch:checked::after {
   transform: translateX(18px);
   background: #fff;
@@ -378,7 +411,7 @@ body {
   margin-top: 4px;
 }
 
-/* Buttons */
+/* Form Buttons */
 .btn-primary {
   background: var(--accent);
   color: #fff;
@@ -413,6 +446,7 @@ body {
   color: var(--text-1);
 }
 
+/* Small utility buttons (Record, Clear) */
 .btn-sm {
   background: var(--bg-hover);
   color: var(--text-2);
@@ -430,6 +464,7 @@ body {
   border-color: var(--accent);
 }
 
+/* Active recording state (pulsing red) */
 .btn-sm.recording {
   background: var(--danger);
   color: #fff;
@@ -469,7 +504,7 @@ body {
   white-space: nowrap;
 }
 
-/* Links */
+/* External links (like GitHub) */
 .link-row a {
   color: var(--accent);
   text-decoration: none;
@@ -481,7 +516,7 @@ body {
   color: var(--accent-2);
 }
 
-/* Utilities */
+/* Spacing Utilities */
 .mt-8 {
   margin-top: 8px;
 }
@@ -494,7 +529,8 @@ body {
   margin-top: 16px;
 }
 
-/* ── OVERLAY PAGE ──────────────────── */
+/* ── OVERLAY PAGE SPECIFIC STYLES ──────────────────── */
+/* Contains the transparent floating widget for the persistent mic icon */
 .overlay-page {
   width: 100vw;
   height: 100vh;
@@ -502,6 +538,7 @@ body {
   align-items: center;
   justify-content: center;
   overflow: hidden;
+  /* Allows the user to move the Tauri window around by dragging anywhere */
   -webkit-app-region: drag;
 }
 
@@ -510,6 +547,7 @@ body {
   pointer-events: none;
 }
 
+/* Blinking dot for microphone activity indicator */
 .vu-dot {
   width: 12px;
   height: 12px;
@@ -528,6 +566,7 @@ body {
 }
 
 /* ── OSD PAGE ──────────────────────── */
+/* Transparent background encompassing the entire screen for the OSD window */
 .osd-page {
   width: 100vw;
   height: 100vh;
@@ -539,15 +578,18 @@ body {
   pointer-events: none;
 }
 
+/* Rounded card displaying the large microphone icon */
 .osd-card {
   border-radius: 20px;
   display: flex;
   align-items: center;
   justify-content: center;
   animation: osd-in .2s ease-out;
+  /* Pop-in scaling animation */
   transition: opacity .3s;
 }
 
+/* Scale and fade keyframes for the OSD popup */
 @keyframes osd-in {
   from {
     transform: scale(.8);
@@ -560,10 +602,12 @@ body {
   }
 }
 
+/* Target class appended by javascript to fade the window out */
 .osd-card.hiding {
   opacity: 0;
 }
 
+/* The actual OSD microphone icon SVG */
 .osd-icon {
   width: 60%;
   height: 60%;

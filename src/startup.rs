@@ -1,7 +1,10 @@
 use std::env;
 use std::fs;
+use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
+
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 const TASK_XML_TEMPLATE: &str = r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -49,6 +52,7 @@ const TASK_XML_TEMPLATE: &str = r#"<?xml version="1.0" encoding="UTF-16"?>
 pub fn get_run_on_startup() -> bool {
     let output = Command::new("schtasks")
         .args(&["/Query", "/TN", "MicMuteStartup"])
+        .creation_flags(CREATE_NO_WINDOW)
         .output();
 
     if let Ok(out) = output {
@@ -95,6 +99,7 @@ fn create_startup_task() {
 
     let output = Command::new("schtasks")
         .args(&["/Create", "/TN", "MicMuteStartup", "/XML", &path_str, "/F"])
+        .creation_flags(CREATE_NO_WINDOW)
         .output();
 
     if let Ok(out) = output {
@@ -112,18 +117,22 @@ fn create_task_elevated(xml_path: &str) {
     let schtasks_args = format!("/Create /TN \"MicMuteStartup\" /XML \"{}\" /F", xml_path);
     let _ = Command::new("powershell")
         .args(&[
+            "-WindowStyle",
+            "Hidden",
             "-Command",
             &format!(
-                "Start-Process schtasks -ArgumentList '{}' -Verb RunAs -Wait",
+                "Start-Process schtasks -ArgumentList '{}' -WindowStyle Hidden -Verb RunAs -Wait",
                 schtasks_args
             ),
         ])
+        .creation_flags(CREATE_NO_WINDOW)
         .output();
 }
 
 fn delete_startup_task() {
     let output = Command::new("schtasks")
         .args(&["/Delete", "/TN", "MicMuteStartup", "/F"])
+        .creation_flags(CREATE_NO_WINDOW)
         .output();
 
     if let Ok(out) = output {
@@ -139,11 +148,14 @@ fn delete_task_elevated() {
     let schtasks_args = "/Delete /TN \"MicMuteStartup\" /F";
     let _ = Command::new("powershell")
         .args(&[
+            "-WindowStyle",
+            "Hidden",
             "-Command",
             &format!(
-                "Start-Process schtasks -ArgumentList '{}' -Verb RunAs -Wait",
+                "Start-Process schtasks -ArgumentList '{}' -WindowStyle Hidden -Verb RunAs -Wait",
                 schtasks_args
             ),
         ])
+        .creation_flags(CREATE_NO_WINDOW)
         .output();
 }

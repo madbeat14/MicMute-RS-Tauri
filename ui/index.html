@@ -1,12 +1,15 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MicMuteRs Settings</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
+
 <body class="settings-page">
+  <!-- Application Header: Contains title, current active/muted status, and a quick toggle button -->
   <header class="app-header">
     <div class="header-icon">🎤</div>
     <div class="header-info">
@@ -19,9 +22,10 @@
     <button class="btn-icon" id="btn-toggle-mute" title="Toggle Mute">🎤</button>
   </header>
 
+  <!-- Main Settings Content Area -->
   <main class="settings-content">
 
-    <!-- Audio Device -->
+    <!-- Audio Device Section: Select microphone to mute/unmute -->
     <section class="card" id="sec-device">
       <div class="card-header" onclick="toggleSection('sec-device')">
         <span>🎧 Audio Device</span><span class="chevron">▾</span>
@@ -33,7 +37,7 @@
       </div>
     </section>
 
-    <!-- Sync Devices -->
+    <!-- Sync Devices Section: Choose additional microphones to mirror the mute state -->
     <section class="card" id="sec-sync">
       <div class="card-header" onclick="toggleSection('sec-sync')">
         <span>🔗 Sync Devices</span><span class="chevron">▾</span>
@@ -44,7 +48,7 @@
       </div>
     </section>
 
-    <!-- Audio Feedback -->
+    <!-- Audio Feedback Section: Enable beep or custom WAV sounds on toggle -->
     <section class="card" id="sec-audio">
       <div class="card-header" onclick="toggleSection('sec-audio')">
         <span>🔊 Audio Feedback</span><span class="chevron">▾</span>
@@ -61,7 +65,7 @@
       </div>
     </section>
 
-    <!-- Hotkeys -->
+    <!-- Hotkeys Section: Configure keyboard shortcuts to toggle mute -->
     <section class="card" id="sec-hotkeys">
       <div class="card-header" onclick="toggleSection('sec-hotkeys')">
         <span>⌨️ Hotkeys</span><span class="chevron">▾</span>
@@ -69,13 +73,14 @@
       <div class="card-body">
         <div class="radio-group">
           <label><input type="radio" name="hk-mode" value="toggle" id="hk-mode-toggle" /> Single Toggle Key</label>
-          <label><input type="radio" name="hk-mode" value="separate" id="hk-mode-sep" /> Separate Mute/Unmute Keys</label>
+          <label><input type="radio" name="hk-mode" value="separate" id="hk-mode-sep" /> Separate Mute/Unmute
+            Keys</label>
         </div>
         <div id="hotkey-rows" class="hotkey-rows mt-12"></div>
       </div>
     </section>
 
-    <!-- Persistent Overlay -->
+    <!-- Persistent Overlay Section: Settings for the floating microphone widget -->
     <section class="card" id="sec-overlay">
       <div class="card-header" onclick="toggleSection('sec-overlay')">
         <span>🪟 Persistent Overlay</span><span class="chevron">▾</span>
@@ -96,13 +101,22 @@
           </label>
           <label class="field-label mt-8">Position</label>
           <select id="sel-overlay-pos" class="select-input">
-            <option>Custom</option><option>Top-Left</option><option>Top-Center</option><option>Top-Right</option>
-            <option>Center-Left</option><option>Center</option><option>Center-Right</option>
-            <option>Bottom-Left</option><option>Bottom-Center</option><option>Bottom-Right</option>
+            <option>Custom</option>
+            <option>Top-Left</option>
+            <option>Top-Center</option>
+            <option>Top-Right</option>
+            <option>Center-Left</option>
+            <option>Center</option>
+            <option>Center-Right</option>
+            <option>Bottom-Left</option>
+            <option>Bottom-Center</option>
+            <option>Bottom-Right</option>
           </select>
           <label class="field-label mt-8">Icon Theme</label>
           <select id="sel-overlay-theme" class="select-input">
-            <option>Auto</option><option>Dark</option><option>Light</option>
+            <option>Auto</option>
+            <option>Dark</option>
+            <option>Light</option>
           </select>
           <label class="field-label mt-8">Size: <span id="overlay-scale-val">48</span>px</label>
           <input type="range" id="slider-overlay-scale" min="16" max="256" class="slider" />
@@ -114,7 +128,7 @@
       </div>
     </section>
 
-    <!-- OSD -->
+    <!-- OSD Section: Settings for the temporary popup notification shown on state change -->
     <section class="card" id="sec-osd">
       <div class="card-header" onclick="toggleSection('sec-osd')">
         <span>📺 On-Screen Display (OSD)</span><span class="chevron">▾</span>
@@ -133,13 +147,15 @@
           <input type="range" id="slider-osd-opacity" min="10" max="100" class="slider" />
           <label class="field-label mt-8">Position</label>
           <select id="sel-osd-pos" class="select-input">
-            <option>Top</option><option>Center</option><option>Bottom</option>
+            <option>Top</option>
+            <option>Center</option>
+            <option>Bottom</option>
           </select>
         </div>
       </div>
     </section>
 
-    <!-- System & Startup -->
+    <!-- System & Startup Section: Boot and AFK idle settings -->
     <section class="card" id="sec-system">
       <div class="card-header" onclick="toggleSection('sec-system')">
         <span>⚙️ System &amp; Startup</span><span class="chevron">▾</span>
@@ -165,11 +181,14 @@
 
   </main>
 
+  <!-- Application Footer: Shows debug messages and the manual Save button -->
   <footer class="app-footer">
     <span class="debug-msg" id="debug-msg"></span>
     <button class="btn-primary" id="btn-save">Save Settings</button>
   </footer>
 
+  <!-- Import application logic -->
   <script src="main.js"></script>
 </body>
+
 </html>
