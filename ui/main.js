@@ -273,6 +273,12 @@ function vkToName(vk) {
  * changes and interact with the rust backend commands.
  */
 function setupEventListeners() {
+    // Tabs
+    document.getElementById("btn-tab-devices").addEventListener("click", () => switchTab('tab-devices'));
+    document.getElementById("btn-tab-audio").addEventListener("click", () => switchTab('tab-audio'));
+    document.getElementById("btn-tab-hotkeys").addEventListener("click", () => switchTab('tab-hotkeys'));
+    document.getElementById("btn-tab-misc").addEventListener("click", () => switchTab('tab-misc'));
+
     // Toggle mute button
     document.getElementById("btn-toggle-mute").addEventListener("click", async () => {
         try {
@@ -519,11 +525,26 @@ function updateSubOptions(checkId, optionsId) {
 }
 
 /**
- * Toggles the expanded/collapsed CSS class state of an accordion section.
- * @param {string} sectionId - HTML ID of the section wrapper
+ * Switches the active tab in the settings menu.
+ * @param {string} tabId - HTML ID of the tab pane to show
  */
-function toggleSection(sectionId) {
-    document.getElementById(sectionId).classList.toggle("collapsed");
+function switchTab(tabId) {
+    // Hide all tab panes
+    document.querySelectorAll('.tab-pane').forEach(pane => {
+        pane.classList.remove('active');
+    });
+    // Remove active class from all tab buttons
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('active');
+    });
+
+    // Show target tab
+    document.getElementById(tabId).classList.add('active');
+    
+    // Set matching button to active
+    const btnId = 'btn-' + tabId;
+    const btn = document.getElementById(btnId);
+    if (btn) btn.classList.add('active');
 }
 
 /**
@@ -540,4 +561,4 @@ function showDebug(msg) {
 //  Start
 // ──────────────────────────────────
 window.addEventListener("DOMContentLoaded", init);
-window.toggleSection = toggleSection;
+window.switchTab = switchTab;

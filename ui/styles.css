@@ -178,7 +178,57 @@ body {
 
 /* ── UI COMPONENTS ──────────────────── */
 
-/* Setting Cards: Expandable accordion blocks */
+/* Tab Navigation */
+.tabs-nav {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+  overflow-x: auto;
+}
+
+.tab-btn {
+  background: transparent;
+  color: var(--text-2);
+  border: none;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transition);
+  white-space: nowrap;
+}
+
+.tab-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.tab-btn.active {
+  background: rgba(108, 99, 255, 0.15);
+  color: var(--accent);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.tab-pane {
+  display: none;
+  flex-direction: column;
+  gap: 8px;
+  animation: fade-in 0.2s ease-out;
+}
+
+.tab-pane.active {
+  display: flex;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Setting Cards: Content blocks */
 .card {
   background: var(--bg-card);
   border: 1px solid var(--border);
@@ -196,29 +246,10 @@ body {
   justify-content: space-between;
   align-items: center;
   padding: 11px 14px;
-  cursor: pointer;
   font-weight: 600;
   font-size: 13px;
   user-select: none;
-  transition: background .15s;
-}
-
-.card-header:hover {
-  background: var(--bg-hover);
-}
-
-.card-header .chevron {
-  font-size: 12px;
-  transition: transform .2s;
-}
-
-/* Accordion collapse logic */
-.card.collapsed .card-header .chevron {
-  transform: rotate(-90deg);
-}
-
-.card.collapsed .card-body {
-  display: none;
+  background: rgba(0,0,0,0.15);
 }
 
 .card-body {
