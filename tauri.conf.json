@@ -57,7 +57,6 @@
         "active": true,
         "targets": "all",
         "icon": [
-            "icons/icon.ico",
             "assets/mic_white.ico"
         ],
         "windows": {
