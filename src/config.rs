@@ -4,49 +4,89 @@ use std::fs;
 use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default)]
 pub struct BeepConfig {
     pub freq: u32,
     pub duration: u32,
     pub count: u32,
 }
 
+impl Default for BeepConfig {
+    fn default() -> Self {
+        BeepConfig {
+            freq: 650,
+            duration: 180,
+            count: 1,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default)]
 pub struct AfkConfig {
     pub enabled: bool,
     pub timeout: u32,
 }
 
+impl Default for AfkConfig {
+    fn default() -> Self {
+        AfkConfig {
+            enabled: false,
+            timeout: 60,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default)]
 pub struct SoundConfig {
     pub file: String,
     pub volume: u32,
 }
 
+impl Default for SoundConfig {
+    fn default() -> Self {
+        SoundConfig {
+            file: String::new(),
+            volume: 50,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default)]
 pub struct HotkeyConfig {
     pub vk: u32,
     pub name: String,
 }
 
+impl Default for HotkeyConfig {
+    fn default() -> Self {
+        HotkeyConfig {
+            vk: 0,
+            name: "None".to_string(),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default)]
 pub struct AppConfig {
     pub device_id: Option<String>,
     pub sync_ids: Vec<String>,
     pub beep_enabled: bool,
     pub audio_mode: String, // "beep" or "custom"
-    
+
     #[serde(rename = "beep_config")]
     pub beep_mode_configs: std::collections::HashMap<String, BeepConfig>,
     #[serde(rename = "sound_config")]
     pub sound_mode_configs: std::collections::HashMap<String, SoundConfig>,
-    
+
     pub hotkey: std::collections::HashMap<String, serde_json::Value>,
-    #[serde(default = "default_hotkey_mode")]
     pub hotkey_mode: String, // "toggle" or "separate"
-    
-    #[serde(default = "default_afk")]
+
     pub afk: AfkConfig,
-    
+
     pub persistent_overlay: OverlayConfig,
     pub osd: OsdConfig,
 }
@@ -55,11 +95,8 @@ fn default_hotkey_mode() -> String {
     "toggle".to_string()
 }
 
-fn default_afk() -> AfkConfig {
-    AfkConfig { enabled: false, timeout: 60 }
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default)]
 pub struct OverlayConfig {
     pub enabled: bool,
     pub show_vu: bool,
@@ -74,34 +111,95 @@ pub struct OverlayConfig {
     pub theme: String,
 }
 
+impl Default for OverlayConfig {
+    fn default() -> Self {
+        OverlayConfig {
+            enabled: false,
+            show_vu: false,
+            opacity: 80,
+            x: 100,
+            y: 100,
+            position_mode: "Custom".to_string(),
+            locked: false,
+            sensitivity: 5,
+            device_id: None,
+            scale: 100,
+            theme: "Auto".to_string(),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default)]
 pub struct OsdConfig {
     pub enabled: bool,
     pub duration: u32,
     pub position: String,
     pub size: u32,
-    #[serde(default = "default_osd_opacity")]
     pub opacity: u8,
 }
 
-fn default_osd_opacity() -> u8 {
-    80
+impl Default for OsdConfig {
+    fn default() -> Self {
+        OsdConfig {
+            enabled: false,
+            duration: 1500,
+            position: "Bottom-Center".to_string(),
+            size: 150,
+            opacity: 80,
+        }
+    }
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
         let mut beep_mode_configs = std::collections::HashMap::new();
-        beep_mode_configs.insert("mute".to_string(), BeepConfig { freq: 650, duration: 180, count: 2 });
-        beep_mode_configs.insert("unmute".to_string(), BeepConfig { freq: 700, duration: 200, count: 1 });
-        
+        beep_mode_configs.insert(
+            "mute".to_string(),
+            BeepConfig {
+                freq: 650,
+                duration: 180,
+                count: 2,
+            },
+        );
+        beep_mode_configs.insert(
+            "unmute".to_string(),
+            BeepConfig {
+                freq: 700,
+                duration: 200,
+                count: 1,
+            },
+        );
+
         let mut sound_mode_configs = std::collections::HashMap::new();
-        sound_mode_configs.insert("mute".to_string(), SoundConfig { file: "mute.wav".to_string(), volume: 50 });
-        sound_mode_configs.insert("unmute".to_string(), SoundConfig { file: "unmute.wav".to_string(), volume: 50 });
-        
+        sound_mode_configs.insert(
+            "mute".to_string(),
+            SoundConfig {
+                file: "mute.wav".to_string(),
+                volume: 50,
+            },
+        );
+        sound_mode_configs.insert(
+            "unmute".to_string(),
+            SoundConfig {
+                file: "unmute.wav".to_string(),
+                volume: 50,
+            },
+        );
+
         let mut hotkey = std::collections::HashMap::new();
-        hotkey.insert("toggle".to_string(), serde_json::json!({ "vk": 0xB3, "name": "Media Play/Pause" }));
-        hotkey.insert("mute".to_string(), serde_json::json!({ "vk": 0, "name": "None" }));
-        hotkey.insert("unmute".to_string(), serde_json::json!({ "vk": 0, "name": "None" }));
+        hotkey.insert(
+            "toggle".to_string(),
+            serde_json::json!({ "vk": 0xB3, "name": "Media Play/Pause" }),
+        );
+        hotkey.insert(
+            "mute".to_string(),
+            serde_json::json!({ "vk": 0, "name": "None" }),
+        );
+        hotkey.insert(
+            "unmute".to_string(),
+            serde_json::json!({ "vk": 0, "name": "None" }),
+        );
 
         Self {
             device_id: None,
@@ -112,27 +210,9 @@ impl Default for AppConfig {
             sound_mode_configs,
             hotkey,
             hotkey_mode: default_hotkey_mode(),
-            afk: default_afk(),
-            persistent_overlay: OverlayConfig {
-                enabled: false,
-                show_vu: false,
-                opacity: 80,
-                x: 100,
-                y: 100,
-                position_mode: "Custom".to_string(),
-                locked: false,
-                sensitivity: 5,
-                device_id: None,
-                scale: 100,
-                theme: "Auto".to_string(),
-            },
-            osd: OsdConfig {
-                enabled: false,
-                duration: 1500,
-                position: "Bottom-Center".to_string(),
-                size: 150,
-                opacity: 80,
-            },
+            afk: AfkConfig::default(),
+            persistent_overlay: OverlayConfig::default(),
+            osd: OsdConfig::default(),
         }
     }
 }
@@ -154,10 +234,6 @@ impl AppConfig {
             if path.exists() {
                 if let Ok(content) = fs::read_to_string(&path) {
                     if let Ok(config) = serde_json::from_str::<Self>(&content) {
-                        // Merge missing default keys for maps if necessary, though missing fields won't deserialize cleanly
-                        // We will rely on default serde values or fallback. Actually, to handle missing fields,
-                        // serde can use defaults, but we didn't annotate `#serde(default)`. Let's assume loading full struct works,
-                        // or if it fails we fall back to default.
                         return config;
                     }
                 }

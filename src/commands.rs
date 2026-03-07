@@ -89,8 +89,10 @@ pub async fn get_config(state: State<'_, Arc<AppState>>) -> Result<config::AppCo
 pub async fn update_config(
     app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
-    new_config: config::AppConfig,
+    new_config: serde_json::Value,
 ) -> Result<(), String> {
+    let new_config: config::AppConfig = serde_json::from_value(new_config)
+        .map_err(|e| format!("Config deserialization failed: {}", e))?;
     new_config.save();
     let get_vk = |val: &serde_json::Value| -> u32 {
         val.get("vk").and_then(|v| v.as_u64()).unwrap_or(0) as u32
