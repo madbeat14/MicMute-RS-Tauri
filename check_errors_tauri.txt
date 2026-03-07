@@ -1,0 +1,762 @@
+    Checking mic-mute-rs v0.1.0 (C:\Users\papop\Documents\MicMuteRs\src-tauri)
+error[E0433]: failed to resolve: could not find `windows_core` in the list of imported crates
+ --> src-tauri\src\com_interfaces.rs:4:1
+  |
+4 | #[interface("f8679f50-850a-41cf-9c72-430f290290c8")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ could not find `windows_core` in the list of imported crates
+  |
+  = note: this error originates in the attribute macro `interface` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: unused import: `Deserialize`
+ --> src-tauri\src\commands.rs:1:13
+  |
+1 | use serde::{Deserialize, Serialize};
+  |             ^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `Mutex`
+ --> src-tauri\src\commands.rs:2:22
+  |
+2 | use std::sync::{Arc, Mutex};
+  |                      ^^^^^
+
+warning: unused import: `utils`
+ --> src-tauri\src\commands.rs:5:47
+  |
+5 | use crate::{AppState, audio, config, startup, utils};
+  |                                               ^^^^^
+
+error[E0277]: `NonNull<c_void>` cannot be sent between threads safely
+    --> src-tauri\src\commands.rs:28:31
+     |
+  28 | pub async fn get_state(state: State<'_, Arc<AppState>>) -> Result<AppStateDto, String> {
+     |                               ^^^^^^^^^^^^^^^^^^^^^^^^ `NonNull<c_void>` cannot be sent between threads safely
+     |
+     = help: within `AudioController`, the trait `Send` is not implemented for `NonNull<c_void>`
+note: required because it appears within the type `IUnknown`
+    --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-core-0.58.0\src\unknown.rs:10:12
+     |
+  10 | pub struct IUnknown(NonNull<c_void>);
+     |            ^^^^^^^^
+note: required because it appears within the type `IMMDevice`
+    --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.58.0\src\Windows\Win32\Media\Audio\mod.rs:2501:38
+     |
+2501 | windows_core::imp::define_interface!(IMMDevice, IMMDevice_Vtbl, 0xd666063f_1587_4e43_81f1_b948e807363f);
+     |                                      ^^^^^^^^^
+note: required because it appears within the type `AudioController`
+    --> src-tauri\src\audio.rs:20:12
+     |
+  20 | pub struct AudioController {
+     |            ^^^^^^^^^^^^^^^
+     = note: required for `std::sync::Mutex<AudioController>` to implement `Sync`
+note: required because it appears within the type `AppState`
+    --> src-tauri\src\lib.rs:20:12
+     |
+  20 | pub struct AppState {
+     |            ^^^^^^^^
+     = note: required for `Arc<AppState>` to implement `Send`
+note: required by a bound in `tauri::State`
+    --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-2.10.3\src\state.rs:21:25
+     |
+  21 | pub struct State<'r, T: Send + Sync + 'static>(&'r T);
+     |                         ^^^^ required by this bound in `State`
+
+error[E0277]: `*mut ()` cannot be sent between threads safely
+   --> src-tauri\src\commands.rs:28:31
+    |
+ 28 | pub async fn get_state(state: State<'_, Arc<AppState>>) -> Result<AppStateDto, String> {
+    |                               ^^^^^^^^^^^^^^^^^^^^^^^^ `*mut ()` cannot be sent between threads safely
+    |
+    = help: within `AudioController`, the trait `Send` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+   --> C:\Users\papop\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\marker.rs:819:12
+    |
+819 | pub struct PhantomData<T: PointeeSized>;
+    |            ^^^^^^^^^^^
+note: required because it appears within the type `rodio::cpal::platform::NotSendSyncAcrossAllPlatforms`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cpal-0.15.3\src\platform\mod.rs:736:8
+    |
+736 | struct NotSendSyncAcrossAllPlatforms(std::marker::PhantomData<*mut ()>);
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `Stream`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cpal-0.15.3\src\platform\mod.rs:671:5
+    |
+671 |     impl_platform_host!(#[cfg(feature = "asio")] Asio asio "ASIO", Wasapi wasapi "WASAPI");
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `OutputStream`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rodio-0.20.1\src\stream.rs:15:12
+    |
+ 15 | pub struct OutputStream {
+    |            ^^^^^^^^^^^^
+note: required because it appears within the type `AudioController`
+   --> src-tauri\src\audio.rs:20:12
+    |
+ 20 | pub struct AudioController {
+    |            ^^^^^^^^^^^^^^^
+    = note: required for `std::sync::Mutex<AudioController>` to implement `Sync`
+note: required because it appears within the type `AppState`
+   --> src-tauri\src\lib.rs:20:12
+    |
+ 20 | pub struct AppState {
+    |            ^^^^^^^^
+    = note: required for `Arc<AppState>` to implement `Send`
+note: required by a bound in `tauri::State`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-2.10.3\src\state.rs:21:25
+    |
+ 21 | pub struct State<'r, T: Send + Sync + 'static>(&'r T);
+    |                         ^^^^ required by this bound in `State`
+    = note: this error originates in the macro `impl_platform_host` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `NonNull<c_void>` cannot be sent between threads safely
+    --> src-tauri\src\commands.rs:41:12
+     |
+  41 |     state: State<'_, Arc<AppState>>,
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^ `NonNull<c_void>` cannot be sent between threads safely
+     |
+     = help: within `AudioController`, the trait `Send` is not implemented for `NonNull<c_void>`
+note: required because it appears within the type `IUnknown`
+    --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-core-0.58.0\src\unknown.rs:10:12
+     |
+  10 | pub struct IUnknown(NonNull<c_void>);
+     |            ^^^^^^^^
+note: required because it appears within the type `IMMDevice`
+    --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.58.0\src\Windows\Win32\Media\Audio\mod.rs:2501:38
+     |
+2501 | windows_core::imp::define_interface!(IMMDevice, IMMDevice_Vtbl, 0xd666063f_1587_4e43_81f1_b948e807363f);
+     |                                      ^^^^^^^^^
+note: required because it appears within the type `AudioController`
+    --> src-tauri\src\audio.rs:20:12
+     |
+  20 | pub struct AudioController {
+     |            ^^^^^^^^^^^^^^^
+     = note: required for `std::sync::Mutex<AudioController>` to implement `Sync`
+note: required because it appears within the type `AppState`
+    --> src-tauri\src\lib.rs:20:12
+     |
+  20 | pub struct AppState {
+     |            ^^^^^^^^
+     = note: required for `Arc<AppState>` to implement `Send`
+note: required by a bound in `tauri::State`
+    --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-2.10.3\src\state.rs:21:25
+     |
+  21 | pub struct State<'r, T: Send + Sync + 'static>(&'r T);
+     |                         ^^^^ required by this bound in `State`
+
+error[E0277]: `*mut ()` cannot be sent between threads safely
+   --> src-tauri\src\commands.rs:41:12
+    |
+ 41 |     state: State<'_, Arc<AppState>>,
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^ `*mut ()` cannot be sent between threads safely
+    |
+    = help: within `AudioController`, the trait `Send` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+   --> C:\Users\papop\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\marker.rs:819:12
+    |
+819 | pub struct PhantomData<T: PointeeSized>;
+    |            ^^^^^^^^^^^
+note: required because it appears within the type `rodio::cpal::platform::NotSendSyncAcrossAllPlatforms`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cpal-0.15.3\src\platform\mod.rs:736:8
+    |
+736 | struct NotSendSyncAcrossAllPlatforms(std::marker::PhantomData<*mut ()>);
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `Stream`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cpal-0.15.3\src\platform\mod.rs:671:5
+    |
+671 |     impl_platform_host!(#[cfg(feature = "asio")] Asio asio "ASIO", Wasapi wasapi "WASAPI");
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `OutputStream`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rodio-0.20.1\src\stream.rs:15:12
+    |
+ 15 | pub struct OutputStream {
+    |            ^^^^^^^^^^^^
+note: required because it appears within the type `AudioController`
+   --> src-tauri\src\audio.rs:20:12
+    |
+ 20 | pub struct AudioController {
+    |            ^^^^^^^^^^^^^^^
+    = note: required for `std::sync::Mutex<AudioController>` to implement `Sync`
+note: required because it appears within the type `AppState`
+   --> src-tauri\src\lib.rs:20:12
+    |
+ 20 | pub struct AppState {
+    |            ^^^^^^^^
+    = note: required for `Arc<AppState>` to implement `Send`
+note: required by a bound in `tauri::State`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-2.10.3\src\state.rs:21:25
+    |
+ 21 | pub struct State<'r, T: Send + Sync + 'static>(&'r T);
+    |                         ^^^^ required by this bound in `State`
+    = note: this error originates in the macro `impl_platform_host` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `NonNull<c_void>` cannot be sent between threads safely
+    --> src-tauri\src\commands.rs:62:12
+     |
+  62 |     state: State<'_, Arc<AppState>>,
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^ `NonNull<c_void>` cannot be sent between threads safely
+     |
+     = help: within `AudioController`, the trait `Send` is not implemented for `NonNull<c_void>`
+note: required because it appears within the type `IUnknown`
+    --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-core-0.58.0\src\unknown.rs:10:12
+     |
+  10 | pub struct IUnknown(NonNull<c_void>);
+     |            ^^^^^^^^
+note: required because it appears within the type `IMMDevice`
+    --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.58.0\src\Windows\Win32\Media\Audio\mod.rs:2501:38
+     |
+2501 | windows_core::imp::define_interface!(IMMDevice, IMMDevice_Vtbl, 0xd666063f_1587_4e43_81f1_b948e807363f);
+     |                                      ^^^^^^^^^
+note: required because it appears within the type `AudioController`
+    --> src-tauri\src\audio.rs:20:12
+     |
+  20 | pub struct AudioController {
+     |            ^^^^^^^^^^^^^^^
+     = note: required for `std::sync::Mutex<AudioController>` to implement `Sync`
+note: required because it appears within the type `AppState`
+    --> src-tauri\src\lib.rs:20:12
+     |
+  20 | pub struct AppState {
+     |            ^^^^^^^^
+     = note: required for `Arc<AppState>` to implement `Send`
+note: required by a bound in `tauri::State`
+    --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-2.10.3\src\state.rs:21:25
+     |
+  21 | pub struct State<'r, T: Send + Sync + 'static>(&'r T);
+     |                         ^^^^ required by this bound in `State`
+
+error[E0277]: `*mut ()` cannot be sent between threads safely
+   --> src-tauri\src\commands.rs:62:12
+    |
+ 62 |     state: State<'_, Arc<AppState>>,
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^ `*mut ()` cannot be sent between threads safely
+    |
+    = help: within `AudioController`, the trait `Send` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+   --> C:\Users\papop\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\marker.rs:819:12
+    |
+819 | pub struct PhantomData<T: PointeeSized>;
+    |            ^^^^^^^^^^^
+note: required because it appears within the type `rodio::cpal::platform::NotSendSyncAcrossAllPlatforms`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cpal-0.15.3\src\platform\mod.rs:736:8
+    |
+736 | struct NotSendSyncAcrossAllPlatforms(std::marker::PhantomData<*mut ()>);
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `Stream`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cpal-0.15.3\src\platform\mod.rs:671:5
+    |
+671 |     impl_platform_host!(#[cfg(feature = "asio")] Asio asio "ASIO", Wasapi wasapi "WASAPI");
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `OutputStream`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rodio-0.20.1\src\stream.rs:15:12
+    |
+ 15 | pub struct OutputStream {
+    |            ^^^^^^^^^^^^
+note: required because it appears within the type `AudioController`
+   --> src-tauri\src\audio.rs:20:12
+    |
+ 20 | pub struct AudioController {
+    |            ^^^^^^^^^^^^^^^
+    = note: required for `std::sync::Mutex<AudioController>` to implement `Sync`
+note: required because it appears within the type `AppState`
+   --> src-tauri\src\lib.rs:20:12
+    |
+ 20 | pub struct AppState {
+    |            ^^^^^^^^
+    = note: required for `Arc<AppState>` to implement `Send`
+note: required by a bound in `tauri::State`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-2.10.3\src\state.rs:21:25
+    |
+ 21 | pub struct State<'r, T: Send + Sync + 'static>(&'r T);
+    |                         ^^^^ required by this bound in `State`
+    = note: this error originates in the macro `impl_platform_host` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `NonNull<c_void>` cannot be sent between threads safely
+    --> src-tauri\src\commands.rs:83:32
+     |
+  83 | pub async fn get_config(state: State<'_, Arc<AppState>>) -> Result<config::AppConfig, String> {
+     |                                ^^^^^^^^^^^^^^^^^^^^^^^^ `NonNull<c_void>` cannot be sent between threads safely
+     |
+     = help: within `AudioController`, the trait `Send` is not implemented for `NonNull<c_void>`
+note: required because it appears within the type `IUnknown`
+    --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-core-0.58.0\src\unknown.rs:10:12
+     |
+  10 | pub struct IUnknown(NonNull<c_void>);
+     |            ^^^^^^^^
+note: required because it appears within the type `IMMDevice`
+    --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.58.0\src\Windows\Win32\Media\Audio\mod.rs:2501:38
+     |
+2501 | windows_core::imp::define_interface!(IMMDevice, IMMDevice_Vtbl, 0xd666063f_1587_4e43_81f1_b948e807363f);
+     |                                      ^^^^^^^^^
+note: required because it appears within the type `AudioController`
+    --> src-tauri\src\audio.rs:20:12
+     |
+  20 | pub struct AudioController {
+     |            ^^^^^^^^^^^^^^^
+     = note: required for `std::sync::Mutex<AudioController>` to implement `Sync`
+note: required because it appears within the type `AppState`
+    --> src-tauri\src\lib.rs:20:12
+     |
+  20 | pub struct AppState {
+     |            ^^^^^^^^
+     = note: required for `Arc<AppState>` to implement `Send`
+note: required by a bound in `tauri::State`
+    --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-2.10.3\src\state.rs:21:25
+     |
+  21 | pub struct State<'r, T: Send + Sync + 'static>(&'r T);
+     |                         ^^^^ required by this bound in `State`
+
+error[E0277]: `*mut ()` cannot be sent between threads safely
+   --> src-tauri\src\commands.rs:83:32
+    |
+ 83 | pub async fn get_config(state: State<'_, Arc<AppState>>) -> Result<config::AppConfig, String> {
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^ `*mut ()` cannot be sent between threads safely
+    |
+    = help: within `AudioController`, the trait `Send` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+   --> C:\Users\papop\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\marker.rs:819:12
+    |
+819 | pub struct PhantomData<T: PointeeSized>;
+    |            ^^^^^^^^^^^
+note: required because it appears within the type `rodio::cpal::platform::NotSendSyncAcrossAllPlatforms`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cpal-0.15.3\src\platform\mod.rs:736:8
+    |
+736 | struct NotSendSyncAcrossAllPlatforms(std::marker::PhantomData<*mut ()>);
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `Stream`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cpal-0.15.3\src\platform\mod.rs:671:5
+    |
+671 |     impl_platform_host!(#[cfg(feature = "asio")] Asio asio "ASIO", Wasapi wasapi "WASAPI");
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `OutputStream`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rodio-0.20.1\src\stream.rs:15:12
+    |
+ 15 | pub struct OutputStream {
+    |            ^^^^^^^^^^^^
+note: required because it appears within the type `AudioController`
+   --> src-tauri\src\audio.rs:20:12
+    |
+ 20 | pub struct AudioController {
+    |            ^^^^^^^^^^^^^^^
+    = note: required for `std::sync::Mutex<AudioController>` to implement `Sync`
+note: required because it appears within the type `AppState`
+   --> src-tauri\src\lib.rs:20:12
+    |
+ 20 | pub struct AppState {
+    |            ^^^^^^^^
+    = note: required for `Arc<AppState>` to implement `Send`
+note: required by a bound in `tauri::State`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-2.10.3\src\state.rs:21:25
+    |
+ 21 | pub struct State<'r, T: Send + Sync + 'static>(&'r T);
+    |                         ^^^^ required by this bound in `State`
+    = note: this error originates in the macro `impl_platform_host` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `NonNull<c_void>` cannot be sent between threads safely
+    --> src-tauri\src\commands.rs:90:12
+     |
+  90 |     state: State<'_, Arc<AppState>>,
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^ `NonNull<c_void>` cannot be sent between threads safely
+     |
+     = help: within `AudioController`, the trait `Send` is not implemented for `NonNull<c_void>`
+note: required because it appears within the type `IUnknown`
+    --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-core-0.58.0\src\unknown.rs:10:12
+     |
+  10 | pub struct IUnknown(NonNull<c_void>);
+     |            ^^^^^^^^
+note: required because it appears within the type `IMMDevice`
+    --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.58.0\src\Windows\Win32\Media\Audio\mod.rs:2501:38
+     |
+2501 | windows_core::imp::define_interface!(IMMDevice, IMMDevice_Vtbl, 0xd666063f_1587_4e43_81f1_b948e807363f);
+     |                                      ^^^^^^^^^
+note: required because it appears within the type `AudioController`
+    --> src-tauri\src\audio.rs:20:12
+     |
+  20 | pub struct AudioController {
+     |            ^^^^^^^^^^^^^^^
+     = note: required for `std::sync::Mutex<AudioController>` to implement `Sync`
+note: required because it appears within the type `AppState`
+    --> src-tauri\src\lib.rs:20:12
+     |
+  20 | pub struct AppState {
+     |            ^^^^^^^^
+     = note: required for `Arc<AppState>` to implement `Send`
+note: required by a bound in `tauri::State`
+    --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-2.10.3\src\state.rs:21:25
+     |
+  21 | pub struct State<'r, T: Send + Sync + 'static>(&'r T);
+     |                         ^^^^ required by this bound in `State`
+
+error[E0277]: `*mut ()` cannot be sent between threads safely
+   --> src-tauri\src\commands.rs:90:12
+    |
+ 90 |     state: State<'_, Arc<AppState>>,
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^ `*mut ()` cannot be sent between threads safely
+    |
+    = help: within `AudioController`, the trait `Send` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+   --> C:\Users\papop\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\marker.rs:819:12
+    |
+819 | pub struct PhantomData<T: PointeeSized>;
+    |            ^^^^^^^^^^^
+note: required because it appears within the type `rodio::cpal::platform::NotSendSyncAcrossAllPlatforms`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cpal-0.15.3\src\platform\mod.rs:736:8
+    |
+736 | struct NotSendSyncAcrossAllPlatforms(std::marker::PhantomData<*mut ()>);
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `Stream`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cpal-0.15.3\src\platform\mod.rs:671:5
+    |
+671 |     impl_platform_host!(#[cfg(feature = "asio")] Asio asio "ASIO", Wasapi wasapi "WASAPI");
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `OutputStream`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rodio-0.20.1\src\stream.rs:15:12
+    |
+ 15 | pub struct OutputStream {
+    |            ^^^^^^^^^^^^
+note: required because it appears within the type `AudioController`
+   --> src-tauri\src\audio.rs:20:12
+    |
+ 20 | pub struct AudioController {
+    |            ^^^^^^^^^^^^^^^
+    = note: required for `std::sync::Mutex<AudioController>` to implement `Sync`
+note: required because it appears within the type `AppState`
+   --> src-tauri\src\lib.rs:20:12
+    |
+ 20 | pub struct AppState {
+    |            ^^^^^^^^
+    = note: required for `Arc<AppState>` to implement `Send`
+note: required by a bound in `tauri::State`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-2.10.3\src\state.rs:21:25
+    |
+ 21 | pub struct State<'r, T: Send + Sync + 'static>(&'r T);
+    |                         ^^^^ required by this bound in `State`
+    = note: this error originates in the macro `impl_platform_host` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `NonNull<c_void>` cannot be sent between threads safely
+    --> src-tauri\src\commands.rs:127:33
+     |
+ 127 | pub async fn get_devices(state: State<'_, Arc<AppState>>) -> Result<Vec<DeviceDto>, String> {
+     |                                 ^^^^^^^^^^^^^^^^^^^^^^^^ `NonNull<c_void>` cannot be sent between threads safely
+     |
+     = help: within `AudioController`, the trait `Send` is not implemented for `NonNull<c_void>`
+note: required because it appears within the type `IUnknown`
+    --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-core-0.58.0\src\unknown.rs:10:12
+     |
+  10 | pub struct IUnknown(NonNull<c_void>);
+     |            ^^^^^^^^
+note: required because it appears within the type `IMMDevice`
+    --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.58.0\src\Windows\Win32\Media\Audio\mod.rs:2501:38
+     |
+2501 | windows_core::imp::define_interface!(IMMDevice, IMMDevice_Vtbl, 0xd666063f_1587_4e43_81f1_b948e807363f);
+     |                                      ^^^^^^^^^
+note: required because it appears within the type `AudioController`
+    --> src-tauri\src\audio.rs:20:12
+     |
+  20 | pub struct AudioController {
+     |            ^^^^^^^^^^^^^^^
+     = note: required for `std::sync::Mutex<AudioController>` to implement `Sync`
+note: required because it appears within the type `AppState`
+    --> src-tauri\src\lib.rs:20:12
+     |
+  20 | pub struct AppState {
+     |            ^^^^^^^^
+     = note: required for `Arc<AppState>` to implement `Send`
+note: required by a bound in `tauri::State`
+    --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-2.10.3\src\state.rs:21:25
+     |
+  21 | pub struct State<'r, T: Send + Sync + 'static>(&'r T);
+     |                         ^^^^ required by this bound in `State`
+
+error[E0277]: `*mut ()` cannot be sent between threads safely
+   --> src-tauri\src\commands.rs:127:33
+    |
+127 | pub async fn get_devices(state: State<'_, Arc<AppState>>) -> Result<Vec<DeviceDto>, String> {
+    |                                 ^^^^^^^^^^^^^^^^^^^^^^^^ `*mut ()` cannot be sent between threads safely
+    |
+    = help: within `AudioController`, the trait `Send` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+   --> C:\Users\papop\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\marker.rs:819:12
+    |
+819 | pub struct PhantomData<T: PointeeSized>;
+    |            ^^^^^^^^^^^
+note: required because it appears within the type `rodio::cpal::platform::NotSendSyncAcrossAllPlatforms`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cpal-0.15.3\src\platform\mod.rs:736:8
+    |
+736 | struct NotSendSyncAcrossAllPlatforms(std::marker::PhantomData<*mut ()>);
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `Stream`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cpal-0.15.3\src\platform\mod.rs:671:5
+    |
+671 |     impl_platform_host!(#[cfg(feature = "asio")] Asio asio "ASIO", Wasapi wasapi "WASAPI");
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `OutputStream`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rodio-0.20.1\src\stream.rs:15:12
+    |
+ 15 | pub struct OutputStream {
+    |            ^^^^^^^^^^^^
+note: required because it appears within the type `AudioController`
+   --> src-tauri\src\audio.rs:20:12
+    |
+ 20 | pub struct AudioController {
+    |            ^^^^^^^^^^^^^^^
+    = note: required for `std::sync::Mutex<AudioController>` to implement `Sync`
+note: required because it appears within the type `AppState`
+   --> src-tauri\src\lib.rs:20:12
+    |
+ 20 | pub struct AppState {
+    |            ^^^^^^^^
+    = note: required for `Arc<AppState>` to implement `Send`
+note: required by a bound in `tauri::State`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-2.10.3\src\state.rs:21:25
+    |
+ 21 | pub struct State<'r, T: Send + Sync + 'static>(&'r T);
+    |                         ^^^^ required by this bound in `State`
+    = note: this error originates in the macro `impl_platform_host` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `NonNull<c_void>` cannot be sent between threads safely
+    --> src-tauri\src\commands.rs:139:12
+     |
+ 139 |     state: State<'_, Arc<AppState>>,
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^ `NonNull<c_void>` cannot be sent between threads safely
+     |
+     = help: within `AudioController`, the trait `Send` is not implemented for `NonNull<c_void>`
+note: required because it appears within the type `IUnknown`
+    --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-core-0.58.0\src\unknown.rs:10:12
+     |
+  10 | pub struct IUnknown(NonNull<c_void>);
+     |            ^^^^^^^^
+note: required because it appears within the type `IMMDevice`
+    --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.58.0\src\Windows\Win32\Media\Audio\mod.rs:2501:38
+     |
+2501 | windows_core::imp::define_interface!(IMMDevice, IMMDevice_Vtbl, 0xd666063f_1587_4e43_81f1_b948e807363f);
+     |                                      ^^^^^^^^^
+note: required because it appears within the type `AudioController`
+    --> src-tauri\src\audio.rs:20:12
+     |
+  20 | pub struct AudioController {
+     |            ^^^^^^^^^^^^^^^
+     = note: required for `std::sync::Mutex<AudioController>` to implement `Sync`
+note: required because it appears within the type `AppState`
+    --> src-tauri\src\lib.rs:20:12
+     |
+  20 | pub struct AppState {
+     |            ^^^^^^^^
+     = note: required for `Arc<AppState>` to implement `Send`
+note: required by a bound in `tauri::State`
+    --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-2.10.3\src\state.rs:21:25
+     |
+  21 | pub struct State<'r, T: Send + Sync + 'static>(&'r T);
+     |                         ^^^^ required by this bound in `State`
+
+error[E0277]: `*mut ()` cannot be sent between threads safely
+   --> src-tauri\src\commands.rs:139:12
+    |
+139 |     state: State<'_, Arc<AppState>>,
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^ `*mut ()` cannot be sent between threads safely
+    |
+    = help: within `AudioController`, the trait `Send` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+   --> C:\Users\papop\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\marker.rs:819:12
+    |
+819 | pub struct PhantomData<T: PointeeSized>;
+    |            ^^^^^^^^^^^
+note: required because it appears within the type `rodio::cpal::platform::NotSendSyncAcrossAllPlatforms`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cpal-0.15.3\src\platform\mod.rs:736:8
+    |
+736 | struct NotSendSyncAcrossAllPlatforms(std::marker::PhantomData<*mut ()>);
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `Stream`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cpal-0.15.3\src\platform\mod.rs:671:5
+    |
+671 |     impl_platform_host!(#[cfg(feature = "asio")] Asio asio "ASIO", Wasapi wasapi "WASAPI");
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `OutputStream`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rodio-0.20.1\src\stream.rs:15:12
+    |
+ 15 | pub struct OutputStream {
+    |            ^^^^^^^^^^^^
+note: required because it appears within the type `AudioController`
+   --> src-tauri\src\audio.rs:20:12
+    |
+ 20 | pub struct AudioController {
+    |            ^^^^^^^^^^^^^^^
+    = note: required for `std::sync::Mutex<AudioController>` to implement `Sync`
+note: required because it appears within the type `AppState`
+   --> src-tauri\src\lib.rs:20:12
+    |
+ 20 | pub struct AppState {
+    |            ^^^^^^^^
+    = note: required for `Arc<AppState>` to implement `Send`
+note: required by a bound in `tauri::State`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-2.10.3\src\state.rs:21:25
+    |
+ 21 | pub struct State<'r, T: Send + Sync + 'static>(&'r T);
+    |                         ^^^^ required by this bound in `State`
+    = note: this error originates in the macro `impl_platform_host` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `NonNull<c_void>` cannot be sent between threads safely
+    --> src-tauri\src\commands.rs:152:44
+     |
+ 152 | pub async fn start_recording_hotkey(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+     |                                            ^^^^^^^^^^^^^^^^^^^^^^^^ `NonNull<c_void>` cannot be sent between threads safely
+     |
+     = help: within `AudioController`, the trait `Send` is not implemented for `NonNull<c_void>`
+note: required because it appears within the type `IUnknown`
+    --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-core-0.58.0\src\unknown.rs:10:12
+     |
+  10 | pub struct IUnknown(NonNull<c_void>);
+     |            ^^^^^^^^
+note: required because it appears within the type `IMMDevice`
+    --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.58.0\src\Windows\Win32\Media\Audio\mod.rs:2501:38
+     |
+2501 | windows_core::imp::define_interface!(IMMDevice, IMMDevice_Vtbl, 0xd666063f_1587_4e43_81f1_b948e807363f);
+     |                                      ^^^^^^^^^
+note: required because it appears within the type `AudioController`
+    --> src-tauri\src\audio.rs:20:12
+     |
+  20 | pub struct AudioController {
+     |            ^^^^^^^^^^^^^^^
+     = note: required for `std::sync::Mutex<AudioController>` to implement `Sync`
+note: required because it appears within the type `AppState`
+    --> src-tauri\src\lib.rs:20:12
+     |
+  20 | pub struct AppState {
+     |            ^^^^^^^^
+     = note: required for `Arc<AppState>` to implement `Send`
+note: required by a bound in `tauri::State`
+    --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-2.10.3\src\state.rs:21:25
+     |
+  21 | pub struct State<'r, T: Send + Sync + 'static>(&'r T);
+     |                         ^^^^ required by this bound in `State`
+
+error[E0277]: `*mut ()` cannot be sent between threads safely
+   --> src-tauri\src\commands.rs:152:44
+    |
+152 | pub async fn start_recording_hotkey(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    |                                            ^^^^^^^^^^^^^^^^^^^^^^^^ `*mut ()` cannot be sent between threads safely
+    |
+    = help: within `AudioController`, the trait `Send` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+   --> C:\Users\papop\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\marker.rs:819:12
+    |
+819 | pub struct PhantomData<T: PointeeSized>;
+    |            ^^^^^^^^^^^
+note: required because it appears within the type `rodio::cpal::platform::NotSendSyncAcrossAllPlatforms`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cpal-0.15.3\src\platform\mod.rs:736:8
+    |
+736 | struct NotSendSyncAcrossAllPlatforms(std::marker::PhantomData<*mut ()>);
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `Stream`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cpal-0.15.3\src\platform\mod.rs:671:5
+    |
+671 |     impl_platform_host!(#[cfg(feature = "asio")] Asio asio "ASIO", Wasapi wasapi "WASAPI");
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `OutputStream`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rodio-0.20.1\src\stream.rs:15:12
+    |
+ 15 | pub struct OutputStream {
+    |            ^^^^^^^^^^^^
+note: required because it appears within the type `AudioController`
+   --> src-tauri\src\audio.rs:20:12
+    |
+ 20 | pub struct AudioController {
+    |            ^^^^^^^^^^^^^^^
+    = note: required for `std::sync::Mutex<AudioController>` to implement `Sync`
+note: required because it appears within the type `AppState`
+   --> src-tauri\src\lib.rs:20:12
+    |
+ 20 | pub struct AppState {
+    |            ^^^^^^^^
+    = note: required for `Arc<AppState>` to implement `Send`
+note: required by a bound in `tauri::State`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-2.10.3\src\state.rs:21:25
+    |
+ 21 | pub struct State<'r, T: Send + Sync + 'static>(&'r T);
+    |                         ^^^^ required by this bound in `State`
+    = note: this error originates in the macro `impl_platform_host` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `NonNull<c_void>` cannot be sent between threads safely
+    --> src-tauri\src\commands.rs:159:41
+     |
+ 159 | pub async fn get_recorded_hotkey(state: State<'_, Arc<AppState>>) -> Result<Option<u32>, String> {
+     |                                         ^^^^^^^^^^^^^^^^^^^^^^^^ `NonNull<c_void>` cannot be sent between threads safely
+     |
+     = help: within `AudioController`, the trait `Send` is not implemented for `NonNull<c_void>`
+note: required because it appears within the type `IUnknown`
+    --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-core-0.58.0\src\unknown.rs:10:12
+     |
+  10 | pub struct IUnknown(NonNull<c_void>);
+     |            ^^^^^^^^
+note: required because it appears within the type `IMMDevice`
+    --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-0.58.0\src\Windows\Win32\Media\Audio\mod.rs:2501:38
+     |
+2501 | windows_core::imp::define_interface!(IMMDevice, IMMDevice_Vtbl, 0xd666063f_1587_4e43_81f1_b948e807363f);
+     |                                      ^^^^^^^^^
+note: required because it appears within the type `AudioController`
+    --> src-tauri\src\audio.rs:20:12
+     |
+  20 | pub struct AudioController {
+     |            ^^^^^^^^^^^^^^^
+     = note: required for `std::sync::Mutex<AudioController>` to implement `Sync`
+note: required because it appears within the type `AppState`
+    --> src-tauri\src\lib.rs:20:12
+     |
+  20 | pub struct AppState {
+     |            ^^^^^^^^
+     = note: required for `Arc<AppState>` to implement `Send`
+note: required by a bound in `tauri::State`
+    --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-2.10.3\src\state.rs:21:25
+     |
+  21 | pub struct State<'r, T: Send + Sync + 'static>(&'r T);
+     |                         ^^^^ required by this bound in `State`
+
+error[E0277]: `*mut ()` cannot be sent between threads safely
+   --> src-tauri\src\commands.rs:159:41
+    |
+159 | pub async fn get_recorded_hotkey(state: State<'_, Arc<AppState>>) -> Result<Option<u32>, String> {
+    |                                         ^^^^^^^^^^^^^^^^^^^^^^^^ `*mut ()` cannot be sent between threads safely
+    |
+    = help: within `AudioController`, the trait `Send` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+   --> C:\Users\papop\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\marker.rs:819:12
+    |
+819 | pub struct PhantomData<T: PointeeSized>;
+    |            ^^^^^^^^^^^
+note: required because it appears within the type `rodio::cpal::platform::NotSendSyncAcrossAllPlatforms`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cpal-0.15.3\src\platform\mod.rs:736:8
+    |
+736 | struct NotSendSyncAcrossAllPlatforms(std::marker::PhantomData<*mut ()>);
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `Stream`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cpal-0.15.3\src\platform\mod.rs:671:5
+    |
+671 |     impl_platform_host!(#[cfg(feature = "asio")] Asio asio "ASIO", Wasapi wasapi "WASAPI");
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `OutputStream`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rodio-0.20.1\src\stream.rs:15:12
+    |
+ 15 | pub struct OutputStream {
+    |            ^^^^^^^^^^^^
+note: required because it appears within the type `AudioController`
+   --> src-tauri\src\audio.rs:20:12
+    |
+ 20 | pub struct AudioController {
+    |            ^^^^^^^^^^^^^^^
+    = note: required for `std::sync::Mutex<AudioController>` to implement `Sync`
+note: required because it appears within the type `AppState`
+   --> src-tauri\src\lib.rs:20:12
+    |
+ 20 | pub struct AppState {
+    |            ^^^^^^^^
+    = note: required for `Arc<AppState>` to implement `Send`
+note: required by a bound in `tauri::State`
+   --> C:\Users\papop\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-2.10.3\src\state.rs:21:25
+    |
+ 21 | pub struct State<'r, T: Send + Sync + 'static>(&'r T);
+    |                         ^^^^ required by this bound in `State`
+    = note: this error originates in the macro `impl_platform_host` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+Some errors have detailed explanations: E0277, E0433.
+For more information about an error, try `rustc --explain E0277`.
+warning: `mic-mute-rs` (lib) generated 3 warnings
+error: could not compile `mic-mute-rs` (lib) due to 19 previous errors; 3 warnings emitted

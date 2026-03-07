@@ -1,0 +1,27 @@
+{
+    "identifier": "default",
+    "description": "Default capabilities",
+    "platforms": [
+        "linux",
+        "macOS",
+        "windows"
+    ],
+    "windows": [
+        "settings",
+        "overlay",
+        "osd"
+    ],
+    "permissions": [
+        "core:default",
+        "core:window:allow-create",
+        "core:window:allow-show",
+        "core:window:allow-hide",
+        "core:window:allow-set-position",
+        "core:window:allow-set-size",
+        "core:window:allow-set-always-on-top",
+        "core:window:allow-set-ignore-cursor-events",
+        "core:window:allow-close",
+        "core:tray:default",
+        "shell:allow-open"
+    ]
+}

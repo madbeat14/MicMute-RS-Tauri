@@ -1,0 +1,77 @@
+[package]
+name = "mic-mute-rs"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "mic-mute-rs"
+path = "src/main.rs"
+
+[[bin]]
+name = "diagnostics"
+path = "src/bin/diagnostics.rs"
+
+[[bin]]
+name = "test_audio_playback"
+path = "src/bin/test_audio_playback.rs"
+
+[[bin]]
+name = "test_cx31993"
+path = "src/bin/test_cx31993.rs"
+
+[[bin]]
+name = "test_direct_mute"
+path = "src/bin/test_direct_mute.rs"
+
+[[bin]]
+name = "test_meter"
+path = "src/bin/test_meter.rs"
+
+[[bin]]
+name = "test_peak"
+path = "src/bin/test_peak.rs"
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-shell = "2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rodio = "0.20"
+directories = "5.0"
+image = "0.25"
+open = "5.0"
+lazy_static = "1.4"
+windows-core = "0.58.0"
+windows-sys = { version = "0.59", features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Dwm",
+    "Win32_Foundation",
+] }
+
+[dependencies.windows]
+version = "0.58.0"
+features = [
+    "Win32_Foundation",
+    "Win32_Media_Audio",
+    "Win32_Media_Audio_Endpoints",
+    "Win32_System_Com",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Registry",
+    "Win32_System_SystemInformation",
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_System_Variant",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_Graphics_Dwm",
+    "Win32_UI_Controls",
+]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }

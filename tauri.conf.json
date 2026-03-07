@@ -1,0 +1,68 @@
+{
+    "$schema": "https://schema.tauri.app/config/2",
+    "productName": "MicMuteRs",
+    "version": "0.1.0",
+    "identifier": "com.madbeat14.micmuters",
+    "build": {
+        "frontendDist": "ui"
+    },
+    "app": {
+        "windows": [
+            {
+                "label": "settings",
+                "title": "MicMuteRs Settings",
+                "url": "index.html",
+                "width": 450,
+                "height": 780,
+                "resizable": true,
+                "decorations": true,
+                "transparent": false,
+                "visible": false,
+                "skipTaskbar": false
+            },
+            {
+                "label": "overlay",
+                "title": "MicMuteRs Overlay",
+                "url": "overlay.html",
+                "width": 48,
+                "height": 48,
+                "resizable": false,
+                "decorations": false,
+                "transparent": true,
+                "visible": false,
+                "alwaysOnTop": true,
+                "skipTaskbar": true,
+                "acceptFirstMouse": false
+            },
+            {
+                "label": "osd",
+                "title": "MicMuteRs OSD",
+                "url": "osd.html",
+                "width": 200,
+                "height": 200,
+                "resizable": false,
+                "decorations": false,
+                "transparent": true,
+                "visible": false,
+                "alwaysOnTop": true,
+                "skipTaskbar": true
+            }
+        ],
+        "withGlobalTauri": true,
+        "security": {
+            "csp": null
+        }
+    },
+    "bundle": {
+        "active": true,
+        "targets": "all",
+        "icon": [
+            "icons/icon.ico",
+            "assets/mic_white.png"
+        ],
+        "windows": {
+            "wix": {},
+            "nsis": {}
+        }
+    }
+}
