@@ -220,6 +220,7 @@ body {
 
 .slider {
   -webkit-appearance: none;
+  appearance: none;
   width: 100%;
   height: 5px;
   background: var(--bg-hover);
@@ -230,6 +231,7 @@ body {
 
 .slider::-webkit-slider-thumb {
   -webkit-appearance: none;
+  appearance: none;
   width: 14px;
   height: 14px;
   border-radius: 50%;
