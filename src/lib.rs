@@ -149,7 +149,54 @@ pub fn emit_state(app: &AppHandle, is_muted: bool, peak: f32) {
 // ─────────────────────────────────────────
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // ── Pre-initialize state BEFORE Tauri builder to prevent IPC race conditions ──
+    let cfg = config::AppConfig::load();
+    let audio_ctrl = audio::AudioController::new(cfg.device_id.as_ref())
+        .or_else(|_| audio::AudioController::new(None))
+        .expect("Failed to initialize audio controller");
+
+    let is_muted = audio_ctrl.is_muted().unwrap_or(false);
+    let devices = audio::get_audio_devices().unwrap_or_default();
+
+    // ── Hotkeys ──
+    let mut initial_vks: Vec<u32> = Vec::new();
+    let get_vk = |val: &serde_json::Value| -> u32 {
+        val.get("vk").and_then(|v| v.as_u64()).unwrap_or(0) as u32
+    };
+    if let Some(h) = cfg.hotkey.get("toggle") {
+        let v = get_vk(h);
+        if v != 0 {
+            initial_vks.push(v);
+        }
+    }
+    if let Some(h) = cfg.hotkey.get("mute") {
+        let v = get_vk(h);
+        if v != 0 {
+            initial_vks.push(v);
+        }
+    }
+    if let Some(h) = cfg.hotkey.get("unmute") {
+        let v = get_vk(h);
+        if v != 0 {
+            initial_vks.push(v);
+        }
+    }
+    if initial_vks.is_empty() {
+        initial_vks.push(0xB3);
+    }
+    let hotkey_mgr = hotkey::HotkeyManager::new(initial_vks);
+
+    // ── Shared state ──
+    let state = Arc::new(AppState {
+        audio: Mutex::new(audio_ctrl),
+        config: Mutex::new(cfg.clone()),
+        hotkeys: Mutex::new(hotkey_mgr),
+        is_muted: Mutex::new(is_muted),
+        available_devices: Mutex::new(devices.clone()),
+    });
+
     tauri::Builder::default()
+        .manage(Arc::clone(&state))
         .plugin(tauri_plugin_shell::init())
         .on_window_event(|win, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
@@ -169,54 +216,7 @@ pub fn run() {
             }
             _ => {}
         })
-        .setup(|app| {
-            // ── Load config & audio ──
-            let cfg = config::AppConfig::load();
-            let audio_ctrl = audio::AudioController::new(cfg.device_id.as_ref())
-                .or_else(|_| audio::AudioController::new(None))
-                .expect("Failed to initialize audio controller");
-
-            let is_muted = audio_ctrl.is_muted().unwrap_or(false);
-            let devices = audio::get_audio_devices().unwrap_or_default();
-
-            // ── Hotkeys ──
-            let mut initial_vks: Vec<u32> = Vec::new();
-            let get_vk = |val: &serde_json::Value| -> u32 {
-                val.get("vk").and_then(|v| v.as_u64()).unwrap_or(0) as u32
-            };
-            if let Some(h) = cfg.hotkey.get("toggle") {
-                let v = get_vk(h);
-                if v != 0 {
-                    initial_vks.push(v);
-                }
-            }
-            if let Some(h) = cfg.hotkey.get("mute") {
-                let v = get_vk(h);
-                if v != 0 {
-                    initial_vks.push(v);
-                }
-            }
-            if let Some(h) = cfg.hotkey.get("unmute") {
-                let v = get_vk(h);
-                if v != 0 {
-                    initial_vks.push(v);
-                }
-            }
-            if initial_vks.is_empty() {
-                initial_vks.push(0xB3);
-            }
-            let hotkey_mgr = hotkey::HotkeyManager::new(initial_vks);
-
-            // ── Shared state ──
-            let state = Arc::new(AppState {
-                audio: Mutex::new(audio_ctrl),
-                config: Mutex::new(cfg.clone()),
-                hotkeys: Mutex::new(hotkey_mgr),
-                is_muted: Mutex::new(is_muted),
-                available_devices: Mutex::new(devices.clone()),
-            });
-            app.manage(Arc::clone(&state));
-
+        .setup(move |app| {
             // ── System tray ──
             let is_light = utils::is_system_light_theme();
             let tray_icon = load_tray_icon(is_muted, is_light);
@@ -374,6 +374,7 @@ pub fn run() {
             commands::set_mute,
             commands::get_config,
             commands::update_config,
+            commands::get_cached_devices,
             commands::get_devices,
             commands::set_device,
             commands::start_recording_hotkey,

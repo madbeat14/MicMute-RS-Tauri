@@ -233,7 +233,20 @@ impl AppConfig {
         if let Some(path) = Self::get_config_path() {
             if path.exists() {
                 if let Ok(content) = fs::read_to_string(&path) {
-                    if let Ok(config) = serde_json::from_str::<Self>(&content) {
+                    if let Ok(mut config) = serde_json::from_str::<Self>(&content) {
+                        // Migrate legacy Python config formats
+                        let mut needs_save = false;
+                        if let Some(mode_val) = config.hotkey.remove("mode") {
+                            if let Some(mode_str) = mode_val.as_str() {
+                                config.hotkey_mode = mode_str.to_string();
+                                needs_save = true;
+                            }
+                        }
+
+                        if needs_save {
+                            config.save();
+                        }
+
                         return config;
                     }
                 }

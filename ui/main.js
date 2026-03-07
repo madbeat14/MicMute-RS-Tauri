@@ -22,6 +22,7 @@ let saveTimeout = null;
  */
 function debouncedSave() {
     if (saveTimeout) clearTimeout(saveTimeout);
+    console.log("Scheduling config save...");
     saveTimeout = setTimeout(saveConfig, 300);
 }
 
@@ -44,11 +45,25 @@ const COMMON_KEYS = [
 async function init() {
     try {
         config = await invoke("get_config");
-        isMuted = (await invoke("get_state")).is_muted;
-        devices = (await invoke("get_devices")).map(d => ({ id: d.id, name: d.name }));
     } catch (e) {
-        console.error("init error:", e);
+        console.error("init config error:", e);
     }
+
+    try {
+        isMuted = (await invoke("get_state")).is_muted;
+    } catch (e) {
+        console.error("init state error:", e);
+    }
+
+    try {
+        // Use cached devices (populated during app startup) — avoids COM threading issues
+        devices = (await invoke("get_cached_devices")).map(d => ({ id: d.id, name: d.name }));
+    } catch (e) {
+        console.error("init devices error:", e);
+        // Fallback to ensuring at least an empty list
+        devices = [];
+    }
+
     applyConfigToUI();
     startVuPoll();
     setupEventListeners();
@@ -56,6 +71,13 @@ async function init() {
         isMuted = e.payload.is_muted;
         updateMuteUI(isMuted);
         updateVU(e.payload.peak_level);
+    });
+
+    // Listen for config updates from backend (e.g. from tray menu)
+    await listen("config-update", e => {
+        console.log("Received config-update", e.payload);
+        config = e.payload.config;
+        applyConfigToUI();
     });
 }
 
@@ -377,11 +399,19 @@ function setupEventListeners() {
  * and applied to the running application instances. Shows a temporary debug message on success.
  */
 async function saveConfig() {
+    if (!config) {
+        showDebug("Cannot save: Config is NULL! (Initialization failed)", true);
+        return;
+    }
     try {
-        await invoke("update_config", { newConfig: config });
+        console.log("Saving new config state to backend", config);
+        // Pass stringified JSON to bypass Tauri v2 camel/snake auto-conversion bugs
+        await invoke("update_config", { payload: JSON.stringify(config) });
         showDebug("Settings saved ✓");
+        console.log("Config successfully applied");
     } catch (e) {
         showDebug("Error saving: " + e);
+        console.error("FAILED to save config:", e);
     }
 }
 
@@ -403,11 +433,18 @@ function updateMuteUI(muted) {
 
 /**
  * Updates the width of the Volume Unit (VU) meter bar.
+ * Windows IAudioMeterInformation returns very small peak values
+ * (typically 0.001-0.05 for speech) so we amplify aggressively.
  * @param {number} peak - The peak audio volume between 0.0 and 1.0
  */
 function updateVU(peak) {
     const bar = document.getElementById("vu-bar");
-    if (bar) bar.style.width = Math.min(100, peak * 300) + "%";
+    if (!bar) return;
+    // Amplify: multiply by 20 to bring typical 0.01-0.05 range into visible territory,
+    // then sqrt to compress high values. Result: 0.01 → ~45%, 0.05 → ~100%
+    const amplified = Math.min(1, peak * 20);
+    const scaled = Math.pow(amplified, 0.5) * 100;
+    bar.style.width = Math.min(100, scaled) + "%";
 }
 
 /**
@@ -420,8 +457,10 @@ function startVuPoll() {
             const s = await invoke("get_state");
             updateVU(s.peak_level);
         } catch (_) { }
-    }, 100);
+    }, 50);
 }
+
+
 
 /**
  * Synchronizes an HTML range slider value with its adjacent text label.

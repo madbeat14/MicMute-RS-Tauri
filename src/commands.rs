@@ -28,6 +28,12 @@ pub struct DeviceDto {
 pub async fn get_state(state: State<'_, Arc<AppState>>) -> Result<AppStateDto, String> {
     let is_muted = *state.is_muted.lock().unwrap();
     let peak = state.audio.lock().unwrap().get_peak_value().unwrap_or(0.0);
+    if peak > 0.0001 {
+        eprintln!(
+            "[DEBUG] get_state: peak_level={:.6}, is_muted={}",
+            peak, is_muted
+        );
+    }
     Ok(AppStateDto {
         is_muted,
         peak_level: peak,
@@ -111,10 +117,23 @@ pub async fn get_config(state: State<'_, Arc<AppState>>) -> Result<config::AppCo
 pub async fn update_config(
     app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
-    new_config: serde_json::Value,
+    payload: String,
 ) -> Result<(), String> {
-    let new_config: config::AppConfig = serde_json::from_value(new_config)
-        .map_err(|e| format!("Config deserialization failed: {}", e))?;
+    eprintln!(
+        "update_config called. Raw payload length: {}",
+        payload.len()
+    );
+    let new_config: config::AppConfig = match serde_json::from_str(&payload) {
+        Ok(cfg) => {
+            eprintln!("Deserialization successful.");
+            cfg
+        }
+        Err(e) => {
+            let err_msg = format!("Config deserialization failed: {}", e);
+            eprintln!("ERROR: {}", err_msg);
+            return Err(err_msg);
+        }
+    };
     new_config.save();
     let get_vk = |val: &serde_json::Value| -> u32 {
         val.get("vk").and_then(|v| v.as_u64()).unwrap_or(0) as u32
@@ -174,14 +193,47 @@ pub async fn update_config(
         }
     }
 
+    // EMIT CONFIG UPDATE EVENT so all frontend windows sync up
+    use tauri::Emitter;
+    let _ = app.emit(
+        "config-update",
+        serde_json::json!({
+            "config": new_config
+        }),
+    );
+
     Ok(())
 }
 
-/// Enumerate audio capture devices.
+/// Return cached audio devices from application state (no COM enumeration).
+/// This is used for initial UI load to avoid COM threading issues.
+#[tauri::command]
+pub async fn get_cached_devices(state: State<'_, Arc<AppState>>) -> Result<Vec<DeviceDto>, String> {
+    let devs = state.available_devices.lock().unwrap().clone();
+    eprintln!(
+        "[DEBUG] get_cached_devices: returning {} devices",
+        devs.len()
+    );
+    for (id, name) in &devs {
+        eprintln!("[DEBUG]   device: {} -> {}", name, id);
+    }
+    Ok(devs
+        .into_iter()
+        .map(|(id, name)| DeviceDto { id, name })
+        .collect())
+}
+
+/// Enumerate audio capture devices (fresh COM enumeration).
+/// Used by "Refresh" button. Falls back to cached devices if enumeration fails.
 #[tauri::command]
 pub async fn get_devices(state: State<'_, Arc<AppState>>) -> Result<Vec<DeviceDto>, String> {
-    let devs = audio::get_audio_devices().map_err(|e| e.to_string())?;
-    *state.available_devices.lock().unwrap() = devs.clone();
+    let devs = match audio::get_audio_devices() {
+        Ok(d) if !d.is_empty() => {
+            *state.available_devices.lock().unwrap() = d.clone();
+            d
+        }
+        Ok(_) | Err(_) => state.available_devices.lock().unwrap().clone(),
+    };
     Ok(devs
         .into_iter()
         .map(|(id, name)| DeviceDto { id, name })

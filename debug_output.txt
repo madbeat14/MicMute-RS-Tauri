@@ -1,0 +1,2 @@
+error: `cargo run` could not determine which binary to run. Use the `--bin` option to specify a binary, or the `default-run` manifest key.
+available binaries: diagnostics, mic-mute-rs, test_audio, test_audio_playback, test_clear_color, test_constants, test_cx31993, test_default_id, test_direct_mute, test_meter, test_peak
