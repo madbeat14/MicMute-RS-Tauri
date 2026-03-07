@@ -37,9 +37,9 @@ function updateIcon() {
 
     let src;
     if (isMuted) {
-        src = isLight ? "assets/mic_muted_black.svg" : "assets/mic_muted_white.svg";
+        src = isLight ? "../assets/mic_muted_black.svg" : "../assets/mic_muted_white.svg";
     } else {
-        src = isLight ? "assets/mic_black.svg" : "assets/mic_white.svg";
+        src = isLight ? "../assets/mic_black.svg" : "../assets/mic_white.svg";
     }
 
     icon.src = src;

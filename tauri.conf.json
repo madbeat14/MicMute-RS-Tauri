@@ -58,7 +58,7 @@
         "targets": "all",
         "icon": [
             "icons/icon.ico",
-            "assets/mic_white.png"
+            "assets/mic_white.ico"
         ],
         "windows": {
             "wix": {},

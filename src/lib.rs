@@ -123,10 +123,10 @@ pub(crate) fn build_tray_menu<M: Manager<tauri::Wry>>(
 
 pub fn load_tray_icon(is_muted: bool, is_light: bool) -> Image<'static> {
     let bytes: &[u8] = match (is_muted, is_light) {
-        (true, true) => include_bytes!("../assets/mic_muted_black.png"),
-        (false, true) => include_bytes!("../assets/mic_black.png"),
-        (true, false) => include_bytes!("../assets/mic_muted_white.png"),
-        (false, false) => include_bytes!("../assets/mic_white.png"),
+        (true, true) => include_bytes!("../assets/mic_muted_black.ico"),
+        (false, true) => include_bytes!("../assets/mic_black.ico"),
+        (true, false) => include_bytes!("../assets/mic_muted_white.ico"),
+        (false, false) => include_bytes!("../assets/mic_white.ico"),
     };
     Image::from_bytes(bytes).expect("failed to load tray icon")
 }
