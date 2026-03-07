@@ -57,7 +57,7 @@
         "active": true,
         "targets": "all",
         "icon": [
-            "assets/mic_white.ico"
+            "ui/assets/mic_white.ico"
         ],
         "windows": {
             "wix": {},

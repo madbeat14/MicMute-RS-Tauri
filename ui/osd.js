@@ -14,9 +14,9 @@ function showOsd(isMuted, duration) {
 
     const isLight = window.matchMedia("(prefers-color-scheme: light)").matches;
     if (isMuted) {
-        icon.src = isLight ? "../assets/mic_muted_black.svg" : "../assets/mic_muted_white.svg";
+        icon.src = isLight ? "assets/mic_muted_black.svg" : "assets/mic_muted_white.svg";
     } else {
-        icon.src = isLight ? "../assets/mic_black.svg" : "../assets/mic_white.svg";
+        icon.src = isLight ? "assets/mic_black.svg" : "assets/mic_white.svg";
     }
 
     // Reset animation

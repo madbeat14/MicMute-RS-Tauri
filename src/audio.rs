@@ -14,8 +14,8 @@ use windows::Win32::System::Com::{
 };
 use windows::core::Result;
 
-const MUTE_WAV: &[u8] = include_bytes!("../assets/mute.wav");
-const UNMUTE_WAV: &[u8] = include_bytes!("../assets/unmute.wav");
+const MUTE_WAV: &[u8] = include_bytes!("../ui/assets/mute.wav");
+const UNMUTE_WAV: &[u8] = include_bytes!("../ui/assets/unmute.wav");
 
 pub struct AudioController {
     #[allow(dead_code)]
@@ -197,7 +197,8 @@ impl AudioController {
                     // Check local assets (Priority for Rust version)
                     if let Ok(exe_path) = std::env::current_exe() {
                         if let Some(parent) = exe_path.parent() {
-                            let local_assets = parent.join("assets").join(sound_cfg_file);
+                            let local_assets =
+                                parent.join("ui").join("assets").join(sound_cfg_file);
                             if local_assets.exists() {
                                 path_found = Some(local_assets);
                             }
@@ -206,6 +207,7 @@ impl AudioController {
                     if path_found.is_none() {
                         let cwd_assets = std::env::current_dir()
                             .unwrap_or_default()
+                            .join("ui")
                             .join("assets")
                             .join(sound_cfg_file);
                         if cwd_assets.exists() {
