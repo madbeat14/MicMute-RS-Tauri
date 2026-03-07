@@ -348,6 +348,15 @@ pub fn run() {
                 }),
             );
 
+            // ── Re-install keyboard hook AFTER all windows and WebView2 instances are created.
+            // Windows chains WH_KEYBOARD_LL hooks in LIFO order: the last hook registered
+            // is called first. By re-registering here we ensure our hook runs before WebView2's,
+            // so we can intercept and swallow media/hotkeys before they reach the browser.
+            {
+                let hk = state.hotkeys.lock().unwrap();
+                hk.reinstall_hook();
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -374,15 +383,16 @@ pub fn run() {
 pub fn do_toggle_mute(app: &AppHandle) {
     let state: tauri::State<Arc<AppState>> = app.state();
     let cfg = state.config.lock().unwrap().clone();
-    if let Ok(audio) = state.audio.try_lock() {
-        if let Ok((muted, _debug)) = audio.toggle_mute(&cfg) {
-            drop(audio);
-            *state.is_muted.lock().unwrap() = muted;
-            let peak = state.audio.lock().unwrap().get_peak_value().unwrap_or(0.0);
-            update_tray_icon(app, muted);
-            emit_state(app, muted, peak);
-            trigger_osd(app, muted);
-        }
+    // Use blocking .lock() instead of try_lock() so that rapid consecutive
+    // hotkey presses are never silently dropped due to a momentarily held lock.
+    let audio = state.audio.lock().unwrap();
+    if let Ok((muted, _debug)) = audio.toggle_mute(&cfg) {
+        drop(audio);
+        *state.is_muted.lock().unwrap() = muted;
+        let peak = state.audio.lock().unwrap().get_peak_value().unwrap_or(0.0);
+        update_tray_icon(app, muted);
+        emit_state(app, muted, peak);
+        trigger_osd(app, muted);
     }
 }
 

@@ -1,23 +1,22 @@
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU32, AtomicBool, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::atomic::AtomicIsize;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GetMessageW, SetWindowsHookExW, UnhookWindowsHookEx, MSG,
-    WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN, WM_KEYUP, WM_SYSKEYUP, KBDLLHOOKSTRUCT
+    CallNextHookEx, GetMessageW, HHOOK, KBDLLHOOKSTRUCT, MSG, SetWindowsHookExW,
+    UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 static HOTKEY_SENDER: OnceLock<Sender<u32>> = OnceLock::new();
 static RECORDING_MODE: AtomicBool = AtomicBool::new(false);
 static RECORD_SENDER: OnceLock<Sender<u32>> = OnceLock::new();
+// Stores the raw value of the currently installed HHOOK so it can be replaced
+static HOOK_HANDLE: AtomicIsize = AtomicIsize::new(0);
 
-static TARGET_VKS: [AtomicU32; 3] = [
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-];
+static TARGET_VKS: [AtomicU32; 3] = [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)];
 
 pub struct HotkeyManager {
     receiver: Receiver<u32>,
@@ -28,33 +27,28 @@ impl HotkeyManager {
     pub fn new(vks: Vec<u32>) -> Self {
         let (sender, receiver) = channel();
         let (rec_sender, record_receiver) = channel();
-        
+
         let _ = HOTKEY_SENDER.set(sender);
         let _ = RECORD_SENDER.set(rec_sender);
-        
+
         for (i, &vk) in vks.iter().take(3).enumerate() {
             TARGET_VKS[i].store(vk, Ordering::SeqCst);
         }
 
         thread::spawn(|| {
+            install_hook();
             unsafe {
-                let hook = SetWindowsHookExW(
-                    WH_KEYBOARD_LL,
-                    Some(hook_callback),
-                    None,
-                    0,
-                ).expect("Failed to install keyboard hook");
-
                 let mut msg = MSG::default();
                 while GetMessageW(&mut msg, None, 0, 0).into() {
-                    // Message loop is required for the hook to receive events
+                    // Message loop required for the hook to receive events
                 }
-
-                let _ = UnhookWindowsHookEx(hook);
             }
         });
 
-        Self { receiver, record_receiver }
+        Self {
+            receiver,
+            record_receiver,
+        }
     }
 
     pub fn set_hotkeys(&self, vks: Vec<u32>) {
@@ -63,8 +57,15 @@ impl HotkeyManager {
             TARGET_VKS[i].store(val, Ordering::SeqCst);
         }
     }
-    
-    
+
+    /// Re-installs the low-level keyboard hook.
+    /// Call this after all Tauri/WebView2 windows are created so our hook is
+    /// registered LAST — Windows chains WH_KEYBOARD_LL hooks in LIFO order,
+    /// meaning the most recently registered hook runs first.
+    pub fn reinstall_hook(&self) {
+        install_hook();
+    }
+
     pub fn try_recv(&self) -> Option<u32> {
         self.receiver.try_recv().ok()
     }
@@ -83,6 +84,22 @@ impl HotkeyManager {
     }
 }
 
+/// Installs (or re-installs) the WH_KEYBOARD_LL hook.
+/// Removes any previously installed hook first.
+fn install_hook() {
+    unsafe {
+        // Remove old hook if present
+        let old = HOOK_HANDLE.swap(0, Ordering::SeqCst);
+        if old != 0 {
+            let _ = UnhookWindowsHookEx(HHOOK(old as *mut _));
+        }
+        // Install new hook
+        if let Ok(hook) = SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_callback), None, 0) {
+            HOOK_HANDLE.store(hook.0 as isize, Ordering::SeqCst);
+        }
+    }
+}
+
 unsafe extern "system" fn hook_callback(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
     if n_code >= 0 {
         let w_param_u32 = w_param.0 as u32;
@@ -91,7 +108,7 @@ unsafe extern "system" fn hook_callback(n_code: i32, w_param: WPARAM, l_param: L
 
         if is_down || is_up {
             let kbd_struct = unsafe { *(l_param.0 as *const KBDLLHOOKSTRUCT) };
-            
+
             if RECORDING_MODE.load(Ordering::SeqCst) {
                 if is_down {
                     if let Some(sender) = RECORD_SENDER.get() {
