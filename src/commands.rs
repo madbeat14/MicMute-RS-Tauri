@@ -134,7 +134,7 @@ pub async fn update_config(
         if new_config.persistent_overlay.enabled {
             let scale = new_config.persistent_overlay.scale as f64;
             let w = if new_config.persistent_overlay.show_vu {
-                scale + 20.0
+                scale + 30.0
             } else {
                 scale
             };

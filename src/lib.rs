@@ -151,6 +151,15 @@ pub fn emit_state(app: &AppHandle, is_muted: bool, peak: f32) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .on_window_event(|win, event| match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                if win.label() == "settings" {
+                    let _ = win.hide();
+                    api.prevent_close();
+                }
+            }
+            _ => {}
+        })
         .setup(|app| {
             // ── Load config & audio ──
             let cfg = config::AppConfig::load();
@@ -238,7 +247,7 @@ pub fn run() {
                     ));
                     let scale = cfg_guard.persistent_overlay.scale as f64;
                     let w = if cfg_guard.persistent_overlay.show_vu {
-                        scale + 20.0
+                        scale + 30.0
                     } else {
                         scale
                     };

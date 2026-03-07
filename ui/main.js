@@ -14,6 +14,12 @@ let recordingKey = null;
 let recordingPollTimer = null;
 let vuPollTimer = null;
 
+let saveTimeout = null;
+function debouncedSave() {
+    if (saveTimeout) clearTimeout(saveTimeout);
+    saveTimeout = setTimeout(saveConfig, 300);
+}
+
 const COMMON_KEYS = [
     [0xB3, "Media Play/Pause"], [0x70, "F1"], [0x71, "F2"],
     [0x72, "F3"], [0x73, "F4"], [0x74, "F5"], [0x75, "F6"],
@@ -166,6 +172,7 @@ function rebuildHotkeyRows() {
             if (!config.hotkey[key]) config.hotkey[key] = {};
             config.hotkey[key].vk = vk;
             config.hotkey[key].name = name;
+            debouncedSave();
         });
     }
 }
@@ -187,6 +194,7 @@ async function startRecording(key) {
             btn.classList.remove("recording");
             config.hotkey[key] = { vk, name: vkToName(vk) };
             rebuildHotkeyRows();
+            debouncedSave();
         }
     }, 100);
 }
@@ -221,34 +229,40 @@ function setupEventListeners() {
         await invoke("set_device", { deviceId: id }).catch(err => showDebug("Device switch failed: " + err));
         config.device_id = id;
         rebuildSyncList();
+        debouncedSave();
     });
 
     // Radio buttons – hotkey mode
     document.getElementById("hk-mode-toggle").addEventListener("change", () => {
         config.hotkey_mode = "toggle";
         rebuildHotkeyRows();
+        debouncedSave();
     });
     document.getElementById("hk-mode-sep").addEventListener("change", () => {
         config.hotkey_mode = "separate";
         rebuildHotkeyRows();
+        debouncedSave();
     });
 
     // Overlay toggle
     document.getElementById("chk-overlay").addEventListener("change", e => {
         config.persistent_overlay.enabled = e.target.checked;
         updateSubOptions("chk-overlay", "overlay-options");
+        debouncedSave();
     });
 
     // OSD toggle
     document.getElementById("chk-osd").addEventListener("change", e => {
         config.osd.enabled = e.target.checked;
         updateSubOptions("chk-osd", "osd-options");
+        debouncedSave();
     });
 
     // AFK toggle
     document.getElementById("chk-afk").addEventListener("change", e => {
         config.afk.enabled = e.target.checked;
         updateSubOptions("chk-afk", "afk-timeout-row");
+        debouncedSave();
     });
 
     // Sliders
@@ -263,20 +277,23 @@ function setupEventListeners() {
     // Selects → config
     document.getElementById("sel-overlay-pos").addEventListener("change", e => {
         config.persistent_overlay.position_mode = e.target.value;
+        debouncedSave();
     });
     document.getElementById("sel-overlay-theme").addEventListener("change", e => {
         config.persistent_overlay.theme = e.target.value;
+        debouncedSave();
     });
     document.getElementById("sel-osd-pos").addEventListener("change", e => {
         config.osd.position = e.target.value;
+        debouncedSave();
     });
 
     // Checkboxes → config
-    document.getElementById("chk-beep").addEventListener("change", e => { config.beep_enabled = e.target.checked; });
-    document.getElementById("radio-beep").addEventListener("change", () => { config.audio_mode = "beep"; });
-    document.getElementById("radio-custom").addEventListener("change", () => { config.audio_mode = "custom"; });
-    document.getElementById("chk-overlay-vu").addEventListener("change", e => { config.persistent_overlay.show_vu = e.target.checked; });
-    document.getElementById("chk-overlay-locked").addEventListener("change", e => { config.persistent_overlay.locked = e.target.checked; });
+    document.getElementById("chk-beep").addEventListener("change", e => { config.beep_enabled = e.target.checked; debouncedSave(); });
+    document.getElementById("radio-beep").addEventListener("change", () => { config.audio_mode = "beep"; debouncedSave(); });
+    document.getElementById("radio-custom").addEventListener("change", () => { config.audio_mode = "custom"; debouncedSave(); });
+    document.getElementById("chk-overlay-vu").addEventListener("change", e => { config.persistent_overlay.show_vu = e.target.checked; debouncedSave(); });
+    document.getElementById("chk-overlay-locked").addEventListener("change", e => { config.persistent_overlay.locked = e.target.checked; debouncedSave(); });
 
     // Startup
     document.getElementById("chk-startup").addEventListener("change", async e => {
@@ -297,6 +314,7 @@ function setupEventListeners() {
         } else {
             config.sync_ids = config.sync_ids.filter(s => s !== id);
         }
+        debouncedSave();
     });
 
     // Help link
@@ -364,6 +382,7 @@ function bindSlider(sliderId, labelId, onValue) {
         const v = parseInt(el.value);
         if (lbl) lbl.textContent = v;
         onValue(v);
+        debouncedSave();
     });
 }
 
