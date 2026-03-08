@@ -172,6 +172,13 @@ pub fn run() {
     tracing::info!("Starting MicMuteRs application");
 
     // ── Pre-initialize state BEFORE Tauri builder to prevent IPC race conditions ──
+    unsafe {
+        let _ = windows::Win32::System::Threading::SetPriorityClass(
+            windows::Win32::System::Threading::GetCurrentProcess(),
+            windows::Win32::System::Threading::HIGH_PRIORITY_CLASS,
+        );
+    }
+
     let cfg = config::AppConfig::load();
     let audio_ctrl = match audio::AudioController::new(cfg.device_id.as_ref())
         .or_else(|e| {
@@ -228,20 +235,12 @@ pub fn run() {
     tauri::Builder::default()
         .manage(Arc::clone(&state))
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .on_window_event(|win, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 if win.label() == "settings" {
                     let _ = win.hide();
                     api.prevent_close();
-                }
-            }
-            tauri::WindowEvent::Focused(true) => {
-                if win.label() == "settings" {
-                    if let Some(state) = win.try_state::<Arc<AppState>>() {
-                        if let Ok(hotkeys) = state.hotkeys.lock() {
-                            hotkeys.reinstall_hook();
-                        }
-                    }
                 }
             }
             _ => {}
@@ -301,6 +300,19 @@ pub fn run() {
             let app_handle = app.handle().clone();
             let state_for_thread = Arc::clone(&state);
             std::thread::spawn(move || {
+                // Wait for a few seconds to let WebView2 load its own hooks, making our hook LAST in the chain
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                {
+                    let hk = state_for_thread.hotkeys.lock().unwrap();
+                    hk.start_hook();
+                }
+
+                unsafe {
+                    let _ = windows::Win32::System::Com::CoInitializeEx(
+                        None,
+                        windows::Win32::System::Com::COINIT_MULTITHREADED,
+                    );
+                }
                 let state = state_for_thread;
                 loop {
                     {
@@ -309,27 +321,36 @@ pub fn run() {
                         let hotkey_cfg = st.hotkey.clone();
                         drop(st);
 
-                        let hk = state.hotkeys.lock().unwrap();
-                        if let Some(vk) = hk.try_recv() {
-                            drop(hk);
-                            let get_vk = |val: &serde_json::Value| -> u32 {
-                                val.get("vk").and_then(|v| v.as_u64()).unwrap_or(0) as u32
-                            };
+                        let mut vks_to_process = Vec::new();
+                        {
+                            let hk = state.hotkeys.lock().unwrap();
+                            while let Some(vk) = hk.try_recv() {
+                                vks_to_process.push(vk);
+                            }
+                        }
+
+                        let get_vk = |val: &serde_json::Value| -> u32 {
+                            val.get("vk").and_then(|v| v.as_u64()).unwrap_or(0) as u32
+                        };
+
+                        for vk in vks_to_process {
                             if mode == "toggle" {
                                 if hotkey_cfg.get("toggle").map(|v| get_vk(v)).unwrap_or(0) == vk {
                                     do_toggle_mute(&app_handle);
                                 }
                             } else {
-                                if hotkey_cfg.get("mute").map(|v| get_vk(v)).unwrap_or(0) == vk {
+                                let m_vk = hotkey_cfg.get("mute").map(|v| get_vk(v)).unwrap_or(0);
+                                let u_vk = hotkey_cfg.get("unmute").map(|v| get_vk(v)).unwrap_or(0);
+                                
+                                if m_vk == u_vk && m_vk == vk {
+                                    // Collision: Mute and Unmute mapped to the same key -> Toggle
+                                    do_toggle_mute(&app_handle);
+                                } else if m_vk == vk {
                                     do_set_mute(&app_handle, true);
-                                } else if hotkey_cfg.get("unmute").map(|v| get_vk(v)).unwrap_or(0)
-                                    == vk
-                                {
+                                } else if u_vk == vk {
                                     do_set_mute(&app_handle, false);
                                 }
                             }
-                        } else {
-                            drop(hk);
                         }
                     }
 
@@ -387,14 +408,7 @@ pub fn run() {
                 }),
             );
 
-            // ── Re-install keyboard hook AFTER all windows and WebView2 instances are created.
-            // Windows chains WH_KEYBOARD_LL hooks in LIFO order: the last hook registered
-            // is called first. By re-registering here we ensure our hook runs before WebView2's,
-            // so we can intercept and swallow media/hotkeys before they reach the browser.
-            {
-                let hk = state.hotkeys.lock().unwrap();
-                hk.reinstall_hook();
-            }
+            // ── The keyboard hook is already installed by the hotkey listener thread ──
 
             Ok(())
         })
@@ -412,6 +426,8 @@ pub fn run() {
             commands::set_run_on_startup_cmd,
             commands::get_run_on_startup_cmd,
             commands::open_url,
+            commands::pick_audio_file,
+            commands::preview_audio_feedback,
         ])
         .run(tauri::generate_context!())
         .expect("fatal error while running tauri application");

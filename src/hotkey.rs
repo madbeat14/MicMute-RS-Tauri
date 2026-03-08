@@ -6,13 +6,15 @@ use std::thread;
 
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GetMessageW, HHOOK, KBDLLHOOKSTRUCT, MSG, SetWindowsHookExW,
-    UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    CallNextHookEx, DispatchMessageW, GetMessageW, TranslateMessage,
+    HHOOK, KBDLLHOOKSTRUCT, MSG, SetWindowsHookExW, UnhookWindowsHookEx,
+    WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 static HOTKEY_SENDER: OnceLock<Sender<u32>> = OnceLock::new();
 static RECORDING_MODE: AtomicBool = AtomicBool::new(false);
 static RECORD_SENDER: OnceLock<Sender<u32>> = OnceLock::new();
+static HOOK_THREAD_ID: AtomicU32 = AtomicU32::new(0);
 // Stores the raw value of the currently installed HHOOK so it can be replaced
 static HOOK_HANDLE: AtomicIsize = AtomicIsize::new(0);
 
@@ -35,20 +37,38 @@ impl HotkeyManager {
             TARGET_VKS[i].store(vk, Ordering::SeqCst);
         }
 
-        thread::spawn(|| {
-            install_hook();
-            unsafe {
-                let mut msg = MSG::default();
-                while GetMessageW(&mut msg, None, 0, 0).into() {
-                    // Message loop required for the hook to receive events
-                }
-            }
-        });
-
         Self {
             receiver,
             record_receiver,
         }
+    }
+
+    /// Spawns the dedicated hook thread and installs the global hook.
+    /// This should be called exactly once.
+    pub fn start_hook(&self) {
+        if HOOK_THREAD_ID.load(Ordering::SeqCst) != 0 {
+            return;
+        }
+        thread::spawn(|| {
+            unsafe {
+                let tid = windows::Win32::System::Threading::GetCurrentThreadId();
+                HOOK_THREAD_ID.store(tid, Ordering::SeqCst);
+
+                // Elevate thread priority to prevent Windows from dropping the hook during high system load
+                let _ = windows::Win32::System::Threading::SetThreadPriority(
+                    windows::Win32::System::Threading::GetCurrentThread(),
+                    windows::Win32::System::Threading::THREAD_PRIORITY_TIME_CRITICAL,
+                );
+            }
+            install_hook();
+            unsafe {
+                let mut msg = MSG::default();
+                while GetMessageW(&mut msg, None, 0, 0).into() {
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            }
+        });
     }
 
     pub fn set_hotkeys(&self, vks: Vec<u32>) {
@@ -58,13 +78,9 @@ impl HotkeyManager {
         }
     }
 
-    /// Re-installs the low-level keyboard hook.
-    /// Call this after all Tauri/WebView2 windows are created so our hook is
-    /// registered LAST — Windows chains WH_KEYBOARD_LL hooks in LIFO order,
-    /// meaning the most recently registered hook runs first.
-    pub fn reinstall_hook(&self) {
-        install_hook();
-    }
+
+
+
 
     pub fn try_recv(&self) -> Option<u32> {
         self.receiver.try_recv().ok()

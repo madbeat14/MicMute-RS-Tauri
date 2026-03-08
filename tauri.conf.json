@@ -66,5 +66,8 @@
             "wix": {},
             "nsis": {}
         }
+    },
+    "plugins": {
+        "dialog": null
     }
 }

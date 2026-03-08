@@ -164,7 +164,10 @@ pub async fn update_config(
             }
         }
     }
-    state.hotkeys.lock().unwrap().set_hotkeys(vks);
+    {
+        let hotkeys = state.hotkeys.lock().unwrap();
+        hotkeys.set_hotkeys(vks);
+    }
     *state.config.lock().unwrap() = new_config.clone();
 
     // UPDATE TRAY MENU Checkmarks
@@ -281,6 +284,45 @@ pub async fn set_run_on_startup_cmd(enable: bool) -> Result<(), String> {
 #[tauri::command]
 pub async fn get_run_on_startup_cmd() -> Result<bool, String> {
     Ok(startup::get_run_on_startup())
+}
+
+/// Open a file dialog to pick a WAV/MP3 file.
+#[tauri::command]
+pub async fn pick_audio_file(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    app.dialog()
+        .file()
+        .add_filter("Audio", &["wav", "mp3"])
+        .pick_file(move |file_path| {
+            let path = file_path.map(|p| p.to_string());
+            let _ = tx.send(path);
+        });
+
+    rx.recv().map_err(|e| e.to_string())
+}
+
+/// Preview a sound based on current UI state (not yet saved to disk).
+#[tauri::command]
+pub async fn preview_audio_feedback(
+    state: State<'_, Arc<AppState>>,
+    mode: String,
+    key: String,
+    payload: String,
+) -> Result<(), String> {
+    let temp_config: config::AppConfig = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
+    let stream_handle = state.audio.lock().unwrap().stream_handle();
+
+    // Force mode for preview
+    let mut preview_cfg = temp_config;
+    preview_cfg.audio_mode = mode;
+
+    std::thread::spawn(move || {
+        crate::audio::play_feedback(&stream_handle, key == "mute", &preview_cfg);
+    });
+
+    Ok(())
 }
 
 /// Open a URL in the default browser.
