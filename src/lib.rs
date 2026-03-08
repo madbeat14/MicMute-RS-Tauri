@@ -293,6 +293,41 @@ pub fn run() {
                     let _ =
                         overlay_win.set_ignore_cursor_events(cfg_guard.persistent_overlay.locked);
                     let _ = overlay_win.show();
+                    
+                    // Apply proper window styles for transparent overlay (remove borders/shadows)
+                    if let Ok(tauri_hwnd) = overlay_win.hwnd() {
+                        use windows::Win32::Foundation::HWND;
+                        use windows::Win32::UI::WindowsAndMessaging::{
+                            SetWindowLongPtrW, GetWindowLongPtrW, GWL_EXSTYLE, GWL_STYLE,
+                            SetWindowPos, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_NOACTIVATE,
+                            WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE,
+                            WS_BORDER, WS_CAPTION, WS_THICKFRAME, WS_DLGFRAME
+                        };
+                        
+                        unsafe {
+                            // Fix extended styles: add layered and transparent styles
+                            let ex_style = GetWindowLongPtrW(HWND(tauri_hwnd.0), GWL_EXSTYLE) as u32;
+                            let new_ex_style = ex_style 
+                                | WS_EX_LAYERED.0 
+                                | WS_EX_TOOLWINDOW.0 
+                                | WS_EX_NOACTIVATE.0;
+                            SetWindowLongPtrW(HWND(tauri_hwnd.0), GWL_EXSTYLE, new_ex_style as isize);
+                            
+                            // Fix regular styles: remove border and caption styles that cause visual artifacts
+                            let style = GetWindowLongPtrW(HWND(tauri_hwnd.0), GWL_STYLE) as u32;
+                            let new_style = style 
+                                & !(WS_BORDER.0 | WS_CAPTION.0 | WS_THICKFRAME.0 | WS_DLGFRAME.0);
+                            SetWindowLongPtrW(HWND(tauri_hwnd.0), GWL_STYLE, new_style as isize);
+                            
+                            // Force window to refresh its frame
+                            let _ = SetWindowPos(
+                                HWND(tauri_hwnd.0),
+                                None,
+                                0, 0, 0, 0,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+                            );
+                        }
+                    }
                 }
             }
 
