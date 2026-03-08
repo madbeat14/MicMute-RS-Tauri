@@ -34,14 +34,43 @@ async function init() {
         updateIcon();
     });
 
+    // Listen for config updates from the main window
+    await listen("config-update", e => {
+        config = e.payload.config;
+        updateDragRegion();
+        updateIcon();
+    });
+
     // Refresh config periodically (catches settings changes)
     setInterval(async () => {
-        config = await invoke("get_config").catch(() => config);
-        updateIcon();
+        const newConfig = await invoke("get_config").catch(() => null);
+        if (newConfig) {
+            config = newConfig;
+            updateDragRegion();
+            updateIcon();
+        }
     }, 2000);
 
     // Setup drag detection
     setupDragDetection();
+    
+    // Initial drag region setup
+    updateDragRegion();
+}
+
+/**
+ * Updates the -webkit-app-region CSS property based on the locked state.
+ * When locked: no-drag (can't move the window)
+ * When unlocked: drag (can move the window by dragging)
+ */
+function updateDragRegion() {
+    if (!config) return;
+    const body = document.body;
+    if (config.persistent_overlay.locked) {
+        body.style.webkitAppRegion = 'no-drag';
+    } else {
+        body.style.webkitAppRegion = 'drag';
+    }
 }
 
 /**
