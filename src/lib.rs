@@ -428,6 +428,8 @@ pub fn run() {
             commands::open_url,
             commands::pick_audio_file,
             commands::preview_audio_feedback,
+            commands::get_overlay_background_is_light,
+            commands::save_overlay_position,
         ])
         .run(tauri::generate_context!())
         .expect("fatal error while running tauri application");

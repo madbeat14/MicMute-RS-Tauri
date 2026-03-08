@@ -168,6 +168,10 @@ pub async fn update_config(
         let hotkeys = state.hotkeys.lock().unwrap();
         hotkeys.set_hotkeys(vks);
     }
+    
+    // Get old config before updating (needed for overlay position logic)
+    let old_config = state.config.lock().unwrap().clone();
+    
     *state.config.lock().unwrap() = new_config.clone();
 
     // UPDATE TRAY MENU Checkmarks
@@ -188,10 +192,31 @@ pub async fn update_config(
                 scale
             };
             let _ = win.set_size(tauri::LogicalSize::new(w, scale));
-            let _ = win.set_position(tauri::LogicalPosition::new(
-                new_config.persistent_overlay.x as f64,
-                new_config.persistent_overlay.y as f64,
-            ));
+            
+            // When locking position, preserve the current window position instead of
+            // resetting to config values. The position should only change when explicitly
+            // set by the user or when position_mode changes.
+            let just_locking = new_config.persistent_overlay.locked && !old_config.persistent_overlay.locked;
+            let position_mode_changed = new_config.persistent_overlay.position_mode != old_config.persistent_overlay.position_mode;
+            
+            if just_locking {
+                // When just locking, get the current window position and save it to config
+                // This ensures the position where the user dragged the overlay is preserved
+                if let Ok(current_pos) = win.outer_position() {
+                    let mut cfg = state.config.lock().unwrap();
+                    cfg.persistent_overlay.x = current_pos.x;
+                    cfg.persistent_overlay.y = current_pos.y;
+                    cfg.save();
+                }
+            } else if position_mode_changed {
+                // Only apply config position when position mode changed (e.g., TopLeft -> Custom)
+                // or when not just locking
+                let _ = win.set_position(tauri::LogicalPosition::new(
+                    new_config.persistent_overlay.x as f64,
+                    new_config.persistent_overlay.y as f64,
+                ));
+            }
+            
             let _ = win.set_ignore_cursor_events(new_config.persistent_overlay.locked);
             let _ = win.show();
         } else {
@@ -329,4 +354,38 @@ pub async fn preview_audio_feedback(
 #[tauri::command]
 pub async fn open_url(url: String) -> Result<(), String> {
     open::that(&url).map_err(|e| e.to_string())
+}
+
+/// Check if the background behind the overlay window is light or dark.
+/// This is used for auto theme detection on the overlay icon.
+#[tauri::command]
+pub async fn get_overlay_background_is_light(app: tauri::AppHandle) -> Result<bool, String> {
+    use tauri::Manager;
+    use windows::Win32::Foundation::HWND;
+    
+    if let Some(overlay_win) = app.get_webview_window("overlay") {
+        let tauri_hwnd = overlay_win.hwnd().map_err(|e| e.to_string())?;
+        // Convert tauri's HWND (windows 0.61) to our HWND (windows 0.58)
+        // Both are transparent wrappers around *mut c_void
+        let hwnd = HWND(tauri_hwnd.0);
+        Ok(crate::utils::is_background_light(hwnd))
+    } else {
+        // Fallback to system theme if overlay window not found
+        Ok(crate::utils::is_system_light_theme())
+    }
+}
+
+/// Save the current overlay position to config without triggering a full config update.
+/// This is called when the user finishes dragging the overlay window.
+#[tauri::command]
+pub async fn save_overlay_position(
+    state: State<'_, Arc<AppState>>,
+    x: i32,
+    y: i32,
+) -> Result<(), String> {
+    let mut cfg = state.config.lock().unwrap();
+    cfg.persistent_overlay.x = x;
+    cfg.persistent_overlay.y = y;
+    cfg.save();
+    Ok(())
 }
