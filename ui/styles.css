@@ -181,11 +181,11 @@ body {
 /* Tab Navigation */
 .tabs-nav {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 16px;
   border-bottom: 1px solid var(--border);
   padding-bottom: 8px;
-  overflow-x: auto;
 }
 
 .tab-btn {
@@ -274,6 +274,51 @@ body {
 .select-input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+/* Text and Number Inputs */
+.text-input, .number-input {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-1);
+  padding: 7px 10px;
+  font-size: 13px;
+  outline: none;
+  width: 100%;
+}
+
+.text-input:focus, .number-input:focus {
+  border-color: var(--accent);
+}
+
+/* Audio Specific Layouts */
+.audio-panel {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+}
+
+.file-input-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+  align-items: center;
+}
+
+.file-input-row .text-input {
+  flex: 1;
+}
+
+.grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.btn-full {
+  width: 100%;
 }
 
 /* Custom HTML Range Slider */

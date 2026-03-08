@@ -98,8 +98,28 @@ function applyConfigToUI() {
 
     // Audio feedback
     document.getElementById("chk-beep").checked = config.beep_enabled;
-    document.getElementById("radio-beep").checked = config.audio_mode === "beep";
-    document.getElementById("radio-custom").checked = config.audio_mode === "custom";
+    const mode = config.audio_mode || "beep";
+    document.getElementById("radio-beep").checked = mode === "beep";
+    document.getElementById("radio-custom").checked = mode === "custom";
+    updateAudioModeUI(mode);
+
+    // Custom sound paths
+    document.getElementById("path-mute").value = config.sound_config?.mute?.file || "";
+    document.getElementById("path-unmute").value = config.sound_config?.unmute?.file || "";
+
+    // Volumes
+    setSlider("slider-vol-mute", config.sound_config?.mute?.volume || 50, "vol-mute-val");
+    setSlider("slider-vol-unmute", config.sound_config?.unmute?.volume || 50, "vol-unmute-val");
+
+    // Beeps
+    const bm = config.beep_config?.mute || { freq: 650, duration: 180, count: 2 };
+    const bu = config.beep_config?.unmute || { freq: 700, duration: 200, count: 1 };
+    document.getElementById("beep-mute-freq").value = bm.freq;
+    document.getElementById("beep-mute-dur").value = bm.duration;
+    document.getElementById("beep-mute-count").value = bm.count;
+    document.getElementById("beep-unmute-freq").value = bu.freq;
+    document.getElementById("beep-unmute-dur").value = bu.duration;
+    document.getElementById("beep-unmute-count").value = bu.count;
 
     // Hotkeys
     document.getElementById("hk-mode-toggle").checked = config.hotkey_mode === "toggle";
@@ -277,7 +297,9 @@ function setupEventListeners() {
     document.getElementById("btn-tab-devices").addEventListener("click", () => switchTab('tab-devices'));
     document.getElementById("btn-tab-audio").addEventListener("click", () => switchTab('tab-audio'));
     document.getElementById("btn-tab-hotkeys").addEventListener("click", () => switchTab('tab-hotkeys'));
-    document.getElementById("btn-tab-misc").addEventListener("click", () => switchTab('tab-misc'));
+    document.getElementById("btn-tab-overlay").addEventListener("click", () => switchTab('tab-overlay'));
+    document.getElementById("btn-tab-osd").addEventListener("click", () => switchTab('tab-osd'));
+    document.getElementById("btn-tab-system").addEventListener("click", () => switchTab('tab-system'));
 
     // Toggle mute button
     document.getElementById("btn-toggle-mute").addEventListener("click", async () => {
@@ -362,8 +384,55 @@ function setupEventListeners() {
 
     // Checkboxes → config
     document.getElementById("chk-beep").addEventListener("change", e => { config.beep_enabled = e.target.checked; debouncedSave(); });
-    document.getElementById("radio-beep").addEventListener("change", () => { config.audio_mode = "beep"; debouncedSave(); });
-    document.getElementById("radio-custom").addEventListener("change", () => { config.audio_mode = "custom"; debouncedSave(); });
+    document.getElementById("radio-beep").addEventListener("change", () => { 
+        config.audio_mode = "beep"; 
+        updateAudioModeUI("beep");
+        debouncedSave(); 
+    });
+    document.getElementById("radio-custom").addEventListener("change", () => { 
+        config.audio_mode = "custom"; 
+        updateAudioModeUI("custom");
+        debouncedSave(); 
+    });
+
+    // Audio Sliders
+    bindSlider("slider-vol-mute", "vol-mute-val", v => {
+        if (!config.sound_config) config.sound_config = {};
+        if (!config.sound_config.mute) config.sound_config.mute = { file: "", volume: 50 };
+        config.sound_config.mute.volume = v;
+    });
+    bindSlider("slider-vol-unmute", "vol-unmute-val", v => {
+        if (!config.sound_config) config.sound_config = {};
+        if (!config.sound_config.unmute) config.sound_config.unmute = { file: "", volume: 50 };
+        config.sound_config.unmute.volume = v;
+    });
+
+    // Beep Inputs
+    const bindBeep = (id, key, field) => {
+        document.getElementById(id).addEventListener("input", e => {
+            if (!config.beep_config) config.beep_config = {};
+            if (!config.beep_config[key]) config.beep_config[key] = { freq: 650, duration: 180, count: 1 };
+            config.beep_config[key][field] = parseInt(e.target.value) || 0;
+            debouncedSave();
+        });
+    };
+    bindBeep("beep-mute-freq", "mute", "freq");
+    bindBeep("beep-mute-dur", "mute", "duration");
+    bindBeep("beep-mute-count", "mute", "count");
+    bindBeep("beep-unmute-freq", "unmute", "freq");
+    bindBeep("beep-unmute-dur", "unmute", "duration");
+    bindBeep("beep-unmute-count", "unmute", "count");
+
+    // Browsing
+    document.getElementById("btn-browse-mute").addEventListener("click", () => pickAudioFile("mute"));
+    document.getElementById("btn-browse-unmute").addEventListener("click", () => pickAudioFile("unmute"));
+
+    // Previews
+    document.getElementById("btn-preview-mute").addEventListener("click", () => previewAudio("custom", "mute"));
+    document.getElementById("btn-preview-unmute").addEventListener("click", () => previewAudio("custom", "unmute"));
+    document.getElementById("btn-preview-beep-mute").addEventListener("click", () => previewAudio("beep", "mute"));
+    document.getElementById("btn-preview-beep-unmute").addEventListener("click", () => previewAudio("beep", "unmute"));
+
     document.getElementById("chk-overlay-vu").addEventListener("change", e => { config.persistent_overlay.show_vu = e.target.checked; debouncedSave(); });
     document.getElementById("chk-overlay-locked").addEventListener("change", e => { config.persistent_overlay.locked = e.target.checked; debouncedSave(); });
 
@@ -424,6 +493,48 @@ async function saveConfig() {
 // ──────────────────────────────────
 //  UI DOM Helpers
 // ──────────────────────────────────
+
+/**
+ * Toggles visibility between Beep and Custom sound controls.
+ * @param {string} mode - "beep" or "custom"
+ */
+function updateAudioModeUI(mode) {
+    document.getElementById("audio-beep-controls").style.display = (mode === "beep") ? "block" : "none";
+    document.getElementById("audio-custom-controls").style.display = (mode === "custom") ? "block" : "none";
+}
+
+/**
+ * Triggers a file picker via Tauri's dialog plugin.
+ * @param {string} key - "mute" or "unmute"
+ */
+async function pickAudioFile(key) {
+    try {
+        const path = await invoke("pick_audio_file");
+        if (path) {
+            if (!config.sound_config) config.sound_config = {};
+            if (!config.sound_config[key]) config.sound_config[key] = { file: "", volume: 50 };
+            config.sound_config[key].file = path;
+            document.getElementById(`path-${key}`).value = path;
+            debouncedSave();
+        }
+    } catch (e) {
+        showDebug("File picking failed: " + e);
+    }
+}
+
+/**
+ * Plays a preview of the sound using current UI parameters without saving first.
+ * @param {string} mode - "beep" or "custom"
+ * @param {string} key - "mute" or "unmute"
+ */
+async function previewAudio(mode, key) {
+    try {
+        const payload = JSON.stringify(config);
+        await invoke("preview_audio_feedback", { mode, key, payload });
+    } catch (e) {
+        showDebug("Preview failed: " + e);
+    }
+}
 
 /**
  * Updates the text and style of the mute status badge and toggle button.
