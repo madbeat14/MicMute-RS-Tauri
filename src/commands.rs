@@ -218,6 +218,32 @@ pub async fn update_config(
             }
             
             let _ = win.set_ignore_cursor_events(new_config.persistent_overlay.locked);
+            
+            // When locking, restore the transparent appearance by recreating the window surface
+            if new_config.persistent_overlay.locked {
+                if let Ok(tauri_hwnd) = win.hwnd() {
+                    use windows::Win32::Foundation::HWND;
+                    use windows::Win32::UI::WindowsAndMessaging::{
+                        SetWindowLongPtrW, GetWindowLongPtrW, GWL_EXSTYLE,
+                        SetWindowPos, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_NOACTIVATE,
+                        WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE
+                    };
+                    
+                    unsafe {
+                        let ex_style = GetWindowLongPtrW(HWND(tauri_hwnd.0), GWL_EXSTYLE) as u32;
+                        // Re-apply transparency styles to restore clean appearance
+                        let new_ex_style = ex_style | WS_EX_LAYERED.0 | WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0;
+                        SetWindowLongPtrW(HWND(tauri_hwnd.0), GWL_EXSTYLE, new_ex_style as isize);
+                        let _ = SetWindowPos(
+                            HWND(tauri_hwnd.0),
+                            None,
+                            0, 0, 0, 0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+                        );
+                    }
+                }
+            }
+            
             let _ = win.show();
         } else {
             let _ = win.hide();
