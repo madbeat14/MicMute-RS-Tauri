@@ -127,7 +127,7 @@ pub async fn update_config(
     payload: String,
 ) -> Result<(), String> {
     tracing::debug!(payload_len = payload.len(), "update_config called");
-    let new_config: config::AppConfig = match serde_json::from_str(&payload) {
+    let mut new_config: config::AppConfig = match serde_json::from_str(&payload) {
         Ok(cfg) => {
             tracing::debug!("Config deserialization successful");
             cfg
@@ -137,6 +137,14 @@ pub async fn update_config(
             return Err(format!("Config deserialization failed: {}", e));
         }
     };
+    // The frontend JS doesn't track overlay position changes from dragging
+    // (those are saved directly via save_overlay_position). Preserve the
+    // backend's current x/y so a settings save doesn't overwrite them.
+    {
+        let current_cfg = state.config.lock().unwrap();
+        new_config.persistent_overlay.x = current_cfg.persistent_overlay.x;
+        new_config.persistent_overlay.y = current_cfg.persistent_overlay.y;
+    }
     new_config.save();
     let get_vk = |val: &serde_json::Value| -> u32 {
         val.get("vk").and_then(|v| v.as_u64()).unwrap_or(0) as u32
@@ -209,11 +217,10 @@ pub async fn update_config(
                     cfg.save();
                 }
             } else if position_mode_changed {
-                // Only apply config position when position mode changed (e.g., TopLeft -> Custom)
-                // or when not just locking
-                let _ = win.set_position(tauri::LogicalPosition::new(
-                    new_config.persistent_overlay.x as f64,
-                    new_config.persistent_overlay.y as f64,
+                // Stored x/y are physical pixels (from outerPosition() in JS)
+                let _ = win.set_position(tauri::PhysicalPosition::new(
+                    new_config.persistent_overlay.x,
+                    new_config.persistent_overlay.y,
                 ));
             }
             

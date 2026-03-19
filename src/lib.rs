@@ -279,9 +279,10 @@ pub fn run() {
             {
                 let cfg_guard = state.config.lock().unwrap();
                 if cfg_guard.persistent_overlay.enabled {
-                    let _ = overlay_win.set_position(tauri::LogicalPosition::new(
-                        cfg_guard.persistent_overlay.x as f64,
-                        cfg_guard.persistent_overlay.y as f64,
+                    // Stored x/y are physical pixels (from outerPosition() in JS)
+                    let _ = overlay_win.set_position(tauri::PhysicalPosition::new(
+                        cfg_guard.persistent_overlay.x,
+                        cfg_guard.persistent_overlay.y,
                     ));
                     let scale = cfg_guard.persistent_overlay.scale as f64;
                     let w = if cfg_guard.persistent_overlay.show_vu {
