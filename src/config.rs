@@ -55,22 +55,6 @@ impl Default for SoundConfig {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
-pub struct HotkeyConfig {
-    pub vk: u32,
-    pub name: String,
-}
-
-impl Default for HotkeyConfig {
-    fn default() -> Self {
-        HotkeyConfig {
-            vk: 0,
-            name: "None".to_string(),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
 pub struct AppConfig {
     pub device_id: Option<String>,
     pub sync_ids: Vec<String>,

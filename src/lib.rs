@@ -389,27 +389,6 @@ pub fn run() {
                 }
             });
 
-            // ── Emit initial config to frontend ──
-            let cfg_json = {
-                let cfg_guard = state.config.lock().unwrap();
-                serde_json::to_value(&*cfg_guard).unwrap_or_default()
-            };
-            let devs_json: Vec<serde_json::Value> = devices
-                .iter()
-                .map(|(id, name)| serde_json::json!({ "id": id, "name": name }))
-                .collect();
-            let _ = app.emit(
-                "initial-data",
-                serde_json::json!({
-                    "config": cfg_json,
-                    "devices": devs_json,
-                    "is_muted": is_muted,
-                    "peak_level": 0.0_f32,
-                }),
-            );
-
-            // ── The keyboard hook is already installed by the hotkey listener thread ──
-
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -510,6 +489,7 @@ pub fn trigger_osd(app: &AppHandle, is_muted: bool) {
     }
     let duration = cfg.osd.duration;
     let size = cfg.osd.size;
+    let opacity = cfg.osd.opacity;
     let position = cfg.osd.position.clone();
     drop(cfg);
 
@@ -528,6 +508,7 @@ pub fn trigger_osd(app: &AppHandle, is_muted: bool) {
             let y = match position.as_str() {
                 "Top" => 50.0,
                 "Bottom" => mon_h - h - 100.0,
+                "Bottom-Center" => mon_h - h - 100.0,
                 _ => (mon_h - h) / 2.0,
             };
             let _ = osd_win.set_position(tauri::PhysicalPosition::new(
@@ -539,7 +520,7 @@ pub fn trigger_osd(app: &AppHandle, is_muted: bool) {
         let _ = osd_win.set_always_on_top(true);
         let _ = osd_win.emit(
             "osd-show",
-            serde_json::json!({ "is_muted": is_muted, "duration": duration }),
+            serde_json::json!({ "is_muted": is_muted, "duration": duration, "opacity": opacity }),
         );
 
         // Auto-hide after duration
@@ -564,21 +545,29 @@ fn handle_tray_event(app: &AppHandle, id: &str, state: &Arc<AppState>) {
             do_toggle_mute(app);
         }
         "toggle_sound" => {
-            let mut cfg = state.config.lock().unwrap();
-            cfg.beep_enabled = !cfg.beep_enabled;
-            cfg.save();
+            let cfg = {
+                let mut cfg = state.config.lock().unwrap();
+                cfg.beep_enabled = !cfg.beep_enabled;
+                cfg.save();
+                cfg.clone()
+            };
+            sync_tray_and_emit(app, state, &cfg);
         }
         "toggle_osd" => {
-            let mut cfg = state.config.lock().unwrap();
-            cfg.osd.enabled = !cfg.osd.enabled;
-            cfg.save();
+            let cfg = {
+                let mut cfg = state.config.lock().unwrap();
+                cfg.osd.enabled = !cfg.osd.enabled;
+                cfg.save();
+                cfg.clone()
+            };
+            sync_tray_and_emit(app, state, &cfg);
         }
         "toggle_overlay" => {
-            let enabled = {
+            let (enabled, cfg) = {
                 let mut cfg = state.config.lock().unwrap();
                 cfg.persistent_overlay.enabled = !cfg.persistent_overlay.enabled;
                 cfg.save();
-                cfg.persistent_overlay.enabled
+                (cfg.persistent_overlay.enabled, cfg.clone())
             };
             if let Some(win) = app.get_webview_window("overlay") {
                 if enabled {
@@ -587,10 +576,14 @@ fn handle_tray_event(app: &AppHandle, id: &str, state: &Arc<AppState>) {
                     let _ = win.hide();
                 }
             }
+            sync_tray_and_emit(app, state, &cfg);
         }
         "toggle_boot" => {
             let current = startup::get_run_on_startup();
             startup::set_run_on_startup(!current);
+            // Rebuild tray to update the checkmark
+            let cfg = state.config.lock().unwrap().clone();
+            sync_tray_and_emit(app, state, &cfg);
         }
         "settings" => {
             if let Some(win) = app.get_webview_window("settings") {
@@ -608,14 +601,30 @@ fn handle_tray_event(app: &AppHandle, id: &str, state: &Arc<AppState>) {
             } else {
                 Some(dev_id.to_string())
             };
-            let mut cfg = state.config.lock().unwrap();
-            cfg.device_id = new_device_id.clone();
-            cfg.save();
-            drop(cfg);
+            let cfg = {
+                let mut cfg = state.config.lock().unwrap();
+                cfg.device_id = new_device_id.clone();
+                cfg.save();
+                cfg.clone()
+            };
             if let Ok(new_audio) = audio::AudioController::new(new_device_id.as_ref()) {
                 *state.audio.lock().unwrap() = new_audio;
             }
+            sync_tray_and_emit(app, state, &cfg);
         }
         _ => {}
     }
+}
+
+/// Rebuild tray menu checkmarks and emit config-update to all frontend windows.
+fn sync_tray_and_emit(app: &AppHandle, state: &Arc<AppState>, cfg: &config::AppConfig) {
+    if let Some(tray) = app.tray_by_id("main") {
+        let devices = state.available_devices.lock().unwrap().clone();
+        let menu = build_tray_menu(app, cfg, &devices);
+        let _ = tray.set_menu(Some(menu));
+    }
+    let _ = app.emit(
+        "config-update",
+        serde_json::json!({ "config": cfg }),
+    );
 }

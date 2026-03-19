@@ -10,7 +10,7 @@ const { listen } = window.__TAURI__.event;
  */
 async function init() {
     await listen("osd-show", e => {
-        showOsd(e.payload.is_muted, e.payload.duration);
+        showOsd(e.payload.is_muted, e.payload.duration, e.payload.opacity);
     });
 }
 
@@ -18,8 +18,9 @@ async function init() {
  * Displays the OSD card with the appropriate icon and automatically hides it after a duration.
  * @param {boolean} isMuted - Whether the microphone is currently muted.
  * @param {number} duration - The duration in milliseconds to show the OSD before fading out.
+ * @param {number} opacity - The opacity percentage (0-100) for the OSD card.
  */
-function showOsd(isMuted, duration) {
+function showOsd(isMuted, duration, opacity) {
     const card = document.getElementById("osd-card");
     const icon = document.getElementById("osd-icon");
     if (!icon || !card) return;
@@ -36,7 +37,7 @@ function showOsd(isMuted, duration) {
     card.style.animation = "none";
     card.offsetHeight; // reflow
     card.style.animation = "";
-    card.style.opacity = "1";
+    card.style.opacity = (opacity ?? 80) / 100;
 
     // Fade out ~300ms before end
     setTimeout(() => {

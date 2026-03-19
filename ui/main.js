@@ -236,6 +236,7 @@ function rebuildHotkeyRows() {
             config.hotkey[key].vk = 0;
             config.hotkey[key].name = "None";
             rebuildHotkeyRows();
+            debouncedSave();
         });
         row.querySelector(`[data-hk-key="${key}"]`).addEventListener("change", e => {
             const vk = parseInt(e.target.value);
