@@ -94,6 +94,25 @@ pub fn vk_to_string(vk: u32) -> String {
 /// Captures the screen area behind the given window and determines if it's light or dark.
 /// Returns true if the background is light, false if dark.
 /// This is used for auto theme detection on the overlay icon.
+/// Toggle WS_EX_TRANSPARENT on an HWND without touching other extended styles.
+/// Tauri's set_ignore_cursor_events() rebuilds ALL extended styles via
+/// SetWindowLongW, which removes WS_EX_LAYERED and breaks transparent
+/// window compositing. This function only toggles the one bit we need.
+pub fn set_click_through(hwnd: HWND, click_through: bool) {
+    unsafe {
+        use windows::Win32::UI::WindowsAndMessaging::*;
+        let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+        let new_ex_style = if click_through {
+            ex_style | WS_EX_TRANSPARENT.0
+        } else {
+            ex_style & !WS_EX_TRANSPARENT.0
+        };
+        if new_ex_style != ex_style {
+            SetWindowLongW(hwnd, GWL_EXSTYLE, new_ex_style as i32);
+        }
+    }
+}
+
 pub fn is_background_light(hwnd: HWND) -> bool {
     unsafe {
         // Get the window position

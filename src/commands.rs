@@ -224,7 +224,17 @@ pub async fn update_config(
                 ));
             }
             
-            let _ = win.set_ignore_cursor_events(new_config.persistent_overlay.locked);
+            // Bootstrap WS_EX_LAYERED via Tauri (TAO sets it up correctly for
+            // WebView2 transparency), then use set_click_through to safely toggle
+            // only WS_EX_TRANSPARENT without ever removing WS_EX_LAYERED.
+            let _ = win.set_ignore_cursor_events(true);
+            if !new_config.persistent_overlay.locked {
+                if let Ok(tauri_hwnd) = win.hwnd() {
+                    use windows::Win32::Foundation::HWND;
+                    let hwnd = HWND(tauri_hwnd.0);
+                    crate::utils::set_click_through(hwnd, false);
+                }
+            }
             let _ = win.show();
         } else {
             let _ = win.hide();

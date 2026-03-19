@@ -291,8 +291,19 @@ pub fn run() {
                         scale
                     };
                     let _ = overlay_win.set_size(tauri::LogicalSize::new(w, scale));
-                    let _ =
-                        overlay_win.set_ignore_cursor_events(cfg_guard.persistent_overlay.locked);
+                    // Bootstrap transparency: Tauri's set_ignore_cursor_events(true)
+                    // triggers TAO to properly add WS_EX_LAYERED (required for WebView2
+                    // per-pixel alpha). We call it once, then use our safe
+                    // set_click_through() to set the actual desired click-through state
+                    // without ever rebuilding the full extended style.
+                    let _ = overlay_win.set_ignore_cursor_events(true);
+                    if !cfg_guard.persistent_overlay.locked {
+                        if let Ok(tauri_hwnd) = overlay_win.hwnd() {
+                            use windows::Win32::Foundation::HWND;
+                            let hwnd = HWND(tauri_hwnd.0);
+                            crate::utils::set_click_through(hwnd, false);
+                        }
+                    }
                     let _ = overlay_win.show();
                 }
             }
