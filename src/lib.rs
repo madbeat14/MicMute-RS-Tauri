@@ -305,6 +305,10 @@ pub fn run() {
                         }
                     }
                     let _ = overlay_win.show();
+                    // Explicitly re-assert always-on-top after show to ensure
+                    // Windows applies the TOPMOST z-order (the config flag alone
+                    // can be lost on system boot when other apps start later).
+                    let _ = overlay_win.set_always_on_top(true);
                 }
             }
 
@@ -584,6 +588,7 @@ fn handle_tray_event(app: &AppHandle, id: &str, state: &Arc<AppState>) {
             if let Some(win) = app.get_webview_window("overlay") {
                 if enabled {
                     let _ = win.show();
+                    let _ = win.set_always_on_top(true);
                 } else {
                     let _ = win.hide();
                 }

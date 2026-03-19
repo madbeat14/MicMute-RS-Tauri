@@ -42,6 +42,10 @@ async function init() {
     });
 
     // Refresh config periodically (catches settings changes)
+    // Also re-assert always-on-top to recover from z-order loss
+    // (e.g., after system boot when other apps steal topmost)
+    const { getCurrentWindow } = window.__TAURI__.window;
+    const overlayWin = getCurrentWindow();
     setInterval(async () => {
         const newConfig = await invoke("get_config").catch(() => null);
         if (newConfig) {
@@ -49,6 +53,7 @@ async function init() {
             updateDragRegion();
             updateIcon();
         }
+        overlayWin.setAlwaysOnTop(true).catch(() => {});
     }, 2000);
 
     // Setup drag detection

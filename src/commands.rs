@@ -236,6 +236,7 @@ pub async fn update_config(
                 }
             }
             let _ = win.show();
+            let _ = win.set_always_on_top(true);
         } else {
             let _ = win.hide();
         }
