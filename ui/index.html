@@ -22,17 +22,18 @@
     <button class="btn-icon" id="btn-toggle-mute" title="Toggle Mute">🎤</button>
   </header>
 
+  <!-- Tab Navigation — outside scroll area so it's always visible -->
+  <nav class="tabs-nav">
+    <button class="tab-btn active" id="btn-tab-devices">Devices</button>
+    <button class="tab-btn" id="btn-tab-audio">Audio</button>
+    <button class="tab-btn" id="btn-tab-hotkeys">Hotkeys</button>
+    <button class="tab-btn" id="btn-tab-overlay">Overlay</button>
+    <button class="tab-btn" id="btn-tab-osd">OSD</button>
+    <button class="tab-btn" id="btn-tab-system">System &amp; Startup</button>
+  </nav>
+
   <!-- Main Settings Content Area -->
   <main class="settings-content">
-
-    <nav class="tabs-nav">
-      <button class="tab-btn active" id="btn-tab-devices">Devices</button>
-      <button class="tab-btn" id="btn-tab-audio">Audio</button>
-      <button class="tab-btn" id="btn-tab-hotkeys">Hotkeys</button>
-      <button class="tab-btn" id="btn-tab-overlay">Overlay</button>
-      <button class="tab-btn" id="btn-tab-osd">OSD</button>
-      <button class="tab-btn" id="btn-tab-system">System &amp; Startup</button>
-    </nav>
 
     <div id="tab-devices" class="tab-pane active">
       <!-- Audio Device Section: Select microphone to mute/unmute -->

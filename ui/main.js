@@ -79,6 +79,9 @@ async function init() {
         config = e.payload.config;
         applyConfigToUI();
     });
+
+    // Auto-fit window size to content on first load
+    autoFitWindow();
 }
 
 // ──────────────────────────────────
@@ -558,10 +561,15 @@ function updateMuteUI(muted) {
 function updateVU(peak) {
     const bar = document.getElementById("vu-bar");
     if (!bar) return;
-    // Amplify: multiply by 20 to bring typical 0.01-0.05 range into visible territory,
-    // then sqrt to compress high values. Result: 0.01 → ~45%, 0.05 → ~100%
-    const amplified = Math.min(1, peak * 20);
-    const scaled = Math.pow(amplified, 0.5) * 100;
+    // Use the overlay's VU sensitivity threshold to gate noise floor
+    const threshold = (config?.persistent_overlay?.sensitivity ?? 5) / 100;
+    if (peak < threshold) {
+        bar.style.width = "0%";
+        return;
+    }
+    // Map from threshold..1.0 → 0..1, then amplify and compress
+    const above = (peak - threshold) / (1 - threshold);
+    const scaled = Math.pow(Math.min(1, above * 10), 0.5) * 100;
     bar.style.width = Math.min(100, scaled) + "%";
 }
 
@@ -574,7 +582,13 @@ function startVuPoll() {
         try {
             const s = await invoke("get_state");
             updateVU(s.peak_level);
-        } catch (_) { }
+            // DEBUG: show peak value in footer
+            const dbg = document.getElementById("debug-msg");
+            if (dbg) dbg.textContent = "peak: " + s.peak_level.toFixed(6);
+        } catch (e) {
+            const dbg = document.getElementById("debug-msg");
+            if (dbg) dbg.textContent = "VU error: " + e;
+        }
     }, 50);
 }
 
@@ -652,11 +666,68 @@ function switchTab(tabId) {
 
     // Show target tab
     document.getElementById(tabId).classList.add('active');
-    
+
     // Set matching button to active
     const btnId = 'btn-' + tabId;
     const btn = document.getElementById(btnId);
     if (btn) btn.classList.add('active');
+
+}
+
+/**
+ * Measures all tab panes to find the tallest, then resizes the window once
+ * so every tab fits without dead space or per-tab resizing.
+ */
+async function autoFitWindow() {
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+    const { getCurrentWindow } = window.__TAURI__.window;
+    const win = getCurrentWindow();
+
+    // Measure minimum width for tabs in one row
+    const tabsNav = document.querySelector('.tabs-nav');
+    let tabsWidth = 0;
+    tabsNav.querySelectorAll('.tab-btn').forEach(btn => {
+        tabsWidth += btn.offsetWidth;
+    });
+    const tabCount = tabsNav.querySelectorAll('.tab-btn').length;
+    tabsWidth += (tabCount - 1) * 4 + 28;
+
+    // Temporarily show all tab panes to measure their natural heights
+    const panes = document.querySelectorAll('.tab-pane');
+    const content = document.querySelector('.settings-content');
+    const prevFlex = content.style.flex;
+    const prevOverflow = content.style.overflow;
+    content.style.flex = '0 0 auto';
+    content.style.overflow = 'visible';
+
+    // Save which pane was active
+    const activePane = document.querySelector('.tab-pane.active');
+
+    let maxPaneH = 0;
+    panes.forEach(pane => {
+        const wasActive = pane.classList.contains('active');
+        if (!wasActive) pane.classList.add('active');
+        const h = pane.scrollHeight;
+        if (h > maxPaneH) maxPaneH = h;
+        if (!wasActive) pane.classList.remove('active');
+    });
+
+    // Restore
+    content.style.flex = prevFlex;
+    content.style.overflow = prevOverflow;
+
+    const header = document.querySelector('.app-header');
+    const footer = document.querySelector('.app-footer');
+    // content padding: 12px top + 12px bottom
+    const totalHeight = header.offsetHeight + tabsNav.offsetHeight + maxPaneH + 24 + footer.offsetHeight;
+
+    const desiredW = Math.max(tabsWidth, 480);
+    const screenH = window.screen.availHeight;
+    const finalH = Math.min(totalHeight, Math.floor(screenH * 0.9));
+
+    const { LogicalSize } = window.__TAURI__.window;
+    await win.setSize(new LogicalSize(desiredW, finalH));
 }
 
 /**
