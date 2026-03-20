@@ -128,7 +128,7 @@ impl Default for OsdConfig {
         OsdConfig {
             enabled: false,
             duration: 1500,
-            position: "Bottom-Center".to_string(),
+            position: "Bottom".to_string(),
             size: 150,
             opacity: 80,
         }

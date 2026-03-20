@@ -310,6 +310,13 @@ pub async fn start_recording_hotkey(state: State<'_, Arc<AppState>>) -> Result<(
     Ok(())
 }
 
+/// Cancel hotkey recording mode without applying a key.
+#[tauri::command]
+pub async fn stop_recording_hotkey(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.hotkeys.lock().unwrap().stop_recording();
+    Ok(())
+}
+
 /// Poll for a recorded hotkey VK code (returns None if not yet recorded).
 #[tauri::command]
 pub async fn get_recorded_hotkey(state: State<'_, Arc<AppState>>) -> Result<Option<u32>, String> {

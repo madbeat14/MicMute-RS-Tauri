@@ -90,6 +90,12 @@ impl HotkeyManager {
         RECORDING_MODE.store(true, Ordering::SeqCst);
     }
 
+    pub fn stop_recording(&self) {
+        RECORDING_MODE.store(false, Ordering::SeqCst);
+        // Drain any pending recorded key so it doesn't leak into the next session
+        while self.record_receiver.try_recv().is_ok() {}
+    }
+
     pub fn try_recv_record(&self) -> Option<u32> {
         if let Ok(vk) = self.record_receiver.try_recv() {
             RECORDING_MODE.store(false, Ordering::SeqCst);

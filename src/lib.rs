@@ -437,6 +437,7 @@ pub fn run() {
             commands::get_devices,
             commands::set_device,
             commands::start_recording_hotkey,
+            commands::stop_recording_hotkey,
             commands::get_recorded_hotkey,
             commands::set_run_on_startup_cmd,
             commands::get_run_on_startup_cmd,
@@ -544,8 +545,7 @@ pub fn trigger_osd(app: &AppHandle, is_muted: bool) {
             let x = (mon_w - w) / 2.0;
             let y = match position.as_str() {
                 "Top" => 50.0,
-                "Bottom" => mon_h - h - 100.0,
-                "Bottom-Center" => mon_h - h - 100.0,
+                "Bottom" | "Bottom-Center" => mon_h - h - 100.0,
                 _ => (mon_h - h) / 2.0,
             };
             let _ = osd_win.set_position(tauri::PhysicalPosition::new(

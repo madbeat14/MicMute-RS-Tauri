@@ -67,6 +67,7 @@ async function init() {
     applyConfigToUI();
     startVuPoll();
     setupEventListeners();
+    setupHotkeyPassthrough();
     await listen("state-update", e => {
         isMuted = e.payload.is_muted;
         updateMuteUI(isMuted);
@@ -264,19 +265,44 @@ async function startRecording(key) {
     btn.classList.add("recording");
     await invoke("start_recording_hotkey");
 
-    // Poll for recorded VK
+    // Poll for recorded VK (backend handles keys when other windows are focused)
     recordingPollTimer = setInterval(async () => {
         const vk = await invoke("get_recorded_hotkey");
         if (vk !== null && vk !== undefined) {
-            clearInterval(recordingPollTimer);
-            recordingKey = null;
-            btn.textContent = "Record";
-            btn.classList.remove("recording");
-            config.hotkey[key] = { vk, name: vkToName(vk) };
-            rebuildHotkeyRows();
-            debouncedSave();
+            finishRecording(key, vk);
         }
     }, 100);
+
+    // Safety timeout: cancel recording after 10s to prevent keyboard lockup
+    setTimeout(() => {
+        if (recordingKey === key) cancelRecording(key);
+    }, 10000);
+}
+
+/**
+ * Finishes recording by applying the key and resetting backend state.
+ */
+function finishRecording(key, vk) {
+    if (recordingPollTimer) { clearInterval(recordingPollTimer); recordingPollTimer = null; }
+    recordingKey = null;
+    const btn = document.getElementById(`rec-${key}`);
+    if (btn) { btn.textContent = "Record"; btn.classList.remove("recording"); }
+    // Tell backend to exit recording mode (in case JS handled it before the backend)
+    invoke("stop_recording_hotkey").catch(() => {});
+    config.hotkey[key] = { vk, name: vkToName(vk) };
+    rebuildHotkeyRows();
+    debouncedSave();
+}
+
+/**
+ * Cancels recording mode and restores UI without changing the hotkey.
+ */
+function cancelRecording(key) {
+    if (recordingPollTimer) { clearInterval(recordingPollTimer); recordingPollTimer = null; }
+    recordingKey = null;
+    const btn = document.getElementById(`rec-${key}`);
+    if (btn) { btn.textContent = "Record"; btn.classList.remove("recording"); }
+    invoke("stop_recording_hotkey").catch(() => {});
 }
 
 /**
@@ -648,6 +674,104 @@ function updateSubOptions(checkId, optionsId) {
     if (!chk || !opts) return;
     opts.style.opacity = chk.checked ? "1" : "0.4";
     opts.style.pointerEvents = chk.checked ? "auto" : "none";
+}
+
+// ──────────────────────────────────
+//  Hotkey passthrough for focused WebView
+// ──────────────────────────────────
+
+/**
+ * Maps a JS KeyboardEvent.code / key to a Windows virtual-key code.
+ * This is needed because WebView2 consumes certain keys (especially media keys)
+ * before they reach the global WH_KEYBOARD_LL hook.
+ */
+const JS_KEY_TO_VK = {
+    'MediaPlayPause': 0xB3, 'MediaTrackNext': 0xB0, 'MediaTrackPrevious': 0xB1,
+    'MediaStop': 0xB2, 'AudioVolumeMute': 0xAD, 'AudioVolumeDown': 0xAE,
+    'AudioVolumeUp': 0xAF, 'F1': 0x70, 'F2': 0x71, 'F3': 0x72, 'F4': 0x73,
+    'F5': 0x74, 'F6': 0x75, 'F7': 0x76, 'F8': 0x77, 'F9': 0x78, 'F10': 0x79,
+    'F11': 0x7A, 'F12': 0x7B, 'Space': 0x20, 'Enter': 0x0D, 'Backspace': 0x08,
+    'Tab': 0x09, 'Escape': 0x1B, 'CapsLock': 0x14, 'Pause': 0x13,
+};
+
+/**
+ * Resolves a Windows VK code from a JS KeyboardEvent.
+ */
+function jsEventToVK(e) {
+    let vk = JS_KEY_TO_VK[e.key] || JS_KEY_TO_VK[e.code] || 0;
+    // For letter, digit, and other standard keys, keyCode maps to Windows VK
+    if (!vk && e.keyCode >= 0x08) vk = e.keyCode;
+    return vk;
+}
+
+/**
+ * Installs a capture-phase keydown listener that checks if the pressed key
+ * matches any configured hotkey. If so, it invokes the corresponding mute
+ * command directly, bypassing the LL hook that WebView2 may have blocked.
+ */
+function setupHotkeyPassthrough() {
+    document.addEventListener('keydown', async (e) => {
+        if (!config) return;
+        // During recording, feed the key to the backend directly
+        // since WebView2 may consume it before the LL hook sees it
+        if (recordingKey) {
+            const vk = jsEventToVK(e);
+            if (vk) {
+                e.preventDefault();
+                e.stopPropagation();
+                finishRecording(recordingKey, vk);
+            }
+            return;
+        }
+
+        const vk = jsEventToVK(e);
+        if (!vk) return;
+
+        const mode = config.hotkey_mode;
+        let matched = false;
+
+        if (mode === 'toggle') {
+            const toggleVk = config.hotkey?.toggle?.vk || 0;
+            if (toggleVk && vk === toggleVk) {
+                matched = true;
+                try {
+                    const res = await invoke("toggle_mute");
+                    isMuted = res.is_muted;
+                    updateMuteUI(isMuted);
+                } catch (_) {}
+            }
+        } else {
+            const muteVk = config.hotkey?.mute?.vk || 0;
+            const unmuteVk = config.hotkey?.unmute?.vk || 0;
+            if (muteVk && muteVk === unmuteVk && vk === muteVk) {
+                matched = true;
+                try {
+                    const res = await invoke("toggle_mute");
+                    isMuted = res.is_muted;
+                    updateMuteUI(isMuted);
+                } catch (_) {}
+            } else if (muteVk && vk === muteVk) {
+                matched = true;
+                try {
+                    const res = await invoke("set_mute", { muted: true });
+                    isMuted = res.is_muted;
+                    updateMuteUI(isMuted);
+                } catch (_) {}
+            } else if (unmuteVk && vk === unmuteVk) {
+                matched = true;
+                try {
+                    const res = await invoke("set_mute", { muted: false });
+                    isMuted = res.is_muted;
+                    updateMuteUI(isMuted);
+                } catch (_) {}
+            }
+        }
+
+        if (matched) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+    }, true);
 }
 
 /**
