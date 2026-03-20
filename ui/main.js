@@ -218,12 +218,18 @@ function rebuildHotkeyRows() {
         const hkCfg = config.hotkey[key] || { vk: 0, name: "None" };
         const currentVk = hkCfg.vk ?? 0;
 
+        // Build options list: COMMON_KEYS + the current recorded key if not already listed
+        let options = COMMON_KEYS;
+        if (currentVk && !COMMON_KEYS.some(([vk]) => vk === currentVk)) {
+            options = [[currentVk, hkCfg.name || vkToName(currentVk)], ...COMMON_KEYS];
+        }
+
         const row = document.createElement("div");
         row.className = "hotkey-row";
         row.innerHTML = `
       <label>${label}:</label>
       <select class="select-input" data-hk-key="${key}">
-        ${COMMON_KEYS.map(([vk, name]) =>
+        ${options.map(([vk, name]) =>
             `<option value="${vk}" ${currentVk === vk ? "selected" : ""}>${name}</option>`
         ).join("")}
       </select>
@@ -244,10 +250,10 @@ function rebuildHotkeyRows() {
         });
         row.querySelector(`[data-hk-key="${key}"]`).addEventListener("change", e => {
             const vk = parseInt(e.target.value);
-            const name = COMMON_KEYS.find(([v]) => v === vk)?.[1] ?? `VK_0x${vk.toString(16).toUpperCase()}`;
             if (!config.hotkey[key]) config.hotkey[key] = {};
             config.hotkey[key].vk = vk;
-            config.hotkey[key].name = name;
+            config.hotkey[key].name = vkToName(vk);
+            rebuildHotkeyRows();
             debouncedSave();
         });
     }
@@ -311,7 +317,34 @@ function cancelRecording(key) {
  * @returns {string} The human readable name or hexadecimal string
  */
 function vkToName(vk) {
-    return COMMON_KEYS.find(([v]) => v === vk)?.[1] ?? `VK_0x${vk.toString(16).toUpperCase().padStart(2, "0")}`;
+    // Check predefined list first
+    const common = COMMON_KEYS.find(([v]) => v === vk);
+    if (common) return common[1];
+    // Letters A-Z
+    if (vk >= 0x41 && vk <= 0x5A) return String.fromCharCode(vk);
+    // Digits 0-9
+    if (vk >= 0x30 && vk <= 0x39) return String(vk - 0x30);
+    // Numpad 0-9
+    if (vk >= 0x60 && vk <= 0x69) return `Numpad ${vk - 0x60}`;
+    // F1-F24
+    if (vk >= 0x70 && vk <= 0x87) return `F${vk - 0x70 + 1}`;
+    // Named keys
+    const VK_NAMES = {
+        0x08: "Backspace", 0x09: "Tab", 0x0D: "Enter", 0x10: "Shift",
+        0x11: "Ctrl", 0x12: "Alt", 0x13: "Pause", 0x14: "Caps Lock",
+        0x1B: "Escape", 0x20: "Space", 0x21: "Page Up", 0x22: "Page Down",
+        0x23: "End", 0x24: "Home", 0x25: "Left", 0x26: "Up",
+        0x27: "Right", 0x28: "Down", 0x2C: "Print Screen", 0x2D: "Insert",
+        0x2E: "Delete", 0x5B: "Left Win", 0x5C: "Right Win", 0x5D: "Menu",
+        0x6A: "Numpad *", 0x6B: "Numpad +", 0x6D: "Numpad -",
+        0x6E: "Numpad .", 0x6F: "Numpad /", 0x90: "Num Lock",
+        0x91: "Scroll Lock", 0xA0: "Left Shift", 0xA1: "Right Shift",
+        0xA2: "Left Ctrl", 0xA3: "Right Ctrl", 0xA4: "Left Alt",
+        0xA5: "Right Alt", 0xBA: ";", 0xBB: "=", 0xBC: ",",
+        0xBD: "-", 0xBE: ".", 0xBF: "/", 0xC0: "`",
+        0xDB: "[", 0xDC: "\\", 0xDD: "]", 0xDE: "'",
+    };
+    return VK_NAMES[vk] ?? `Key 0x${vk.toString(16).toUpperCase().padStart(2, "0")}`;
 }
 
 // ──────────────────────────────────
