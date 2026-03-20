@@ -113,6 +113,21 @@ pub fn set_click_through(hwnd: HWND, click_through: bool) {
     }
 }
 
+/// Force a window to HWND_TOPMOST z-order using SetWindowPos directly.
+/// More reliable than Tauri's set_always_on_top because it issues the
+/// Win32 call without rebuilding window styles.
+pub fn force_topmost(hwnd: HWND) {
+    unsafe {
+        use windows::Win32::UI::WindowsAndMessaging::*;
+        SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        ).ok();
+    }
+}
+
 pub fn is_background_light(hwnd: HWND) -> bool {
     unsafe {
         // Get the window position

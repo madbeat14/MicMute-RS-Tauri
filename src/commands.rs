@@ -393,6 +393,13 @@ pub async fn get_overlay_background_is_light(app: tauri::AppHandle) -> Result<bo
     }
 }
 
+/// Return the overlay always-on-top re-assertion interval in milliseconds.
+/// Used by the frontend to match the backend's polling frequency.
+#[tauri::command]
+pub fn get_overlay_topmost_interval() -> u64 {
+    crate::constants::OVERLAY_TOPMOST_INTERVAL_MS
+}
+
 /// Save the current overlay position to config without triggering a full config update.
 /// This is called when the user finishes dragging the overlay window.
 #[tauri::command]

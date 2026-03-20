@@ -49,3 +49,6 @@ pub const DEFAULT_OSD_DURATION_MS: u32 = 1500;
 
 /// Default OSD size in pixels
 pub const DEFAULT_OSD_SIZE: u32 = 150;
+
+/// Interval in milliseconds for re-asserting overlay always-on-top z-order
+pub const OVERLAY_TOPMOST_INTERVAL_MS: u64 = 500;

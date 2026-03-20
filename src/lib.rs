@@ -330,6 +330,7 @@ pub fn run() {
                     );
                 }
                 let state = state_for_thread;
+                let mut topmost_counter: u32 = 0;
                 loop {
                     {
                         let st = state.config.lock().unwrap();
@@ -401,6 +402,25 @@ pub fn run() {
                         }
                     }
 
+                    // Re-assert overlay HWND_TOPMOST periodically
+                    topmost_counter += 1;
+                    let topmost_ticks = (constants::OVERLAY_TOPMOST_INTERVAL_MS / constants::HOTKEY_POLL_INTERVAL_MS) as u32;
+                    if topmost_counter >= topmost_ticks {
+                        topmost_counter = 0;
+                        let overlay_enabled = {
+                            state.config.lock().unwrap().persistent_overlay.enabled
+                        };
+                        if overlay_enabled {
+                            if let Some(win) = app_handle.get_webview_window("overlay") {
+                                if let Ok(tauri_hwnd) = win.hwnd() {
+                                    use windows::Win32::Foundation::HWND;
+                                    let hwnd = HWND(tauri_hwnd.0);
+                                    crate::utils::force_topmost(hwnd);
+                                }
+                            }
+                        }
+                    }
+
                     std::thread::sleep(std::time::Duration::from_millis(10));
                 }
             });
@@ -425,6 +445,7 @@ pub fn run() {
             commands::preview_audio_feedback,
             commands::get_overlay_background_is_light,
             commands::save_overlay_position,
+            commands::get_overlay_topmost_interval,
         ])
         .run(tauri::generate_context!())
         .expect("fatal error while running tauri application");

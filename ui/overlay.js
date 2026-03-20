@@ -41,11 +41,11 @@ async function init() {
         updateIcon();
     });
 
-    // Refresh config periodically (catches settings changes)
-    // Also re-assert always-on-top to recover from z-order loss
-    // (e.g., after system boot when other apps steal topmost)
+    // Refresh config and re-assert always-on-top periodically.
+    // Interval matches the backend's OVERLAY_TOPMOST_INTERVAL_MS constant.
     const { getCurrentWindow } = window.__TAURI__.window;
     const overlayWin = getCurrentWindow();
+    const topmostInterval = await invoke("get_overlay_topmost_interval").catch(() => 500);
     setInterval(async () => {
         const newConfig = await invoke("get_config").catch(() => null);
         if (newConfig) {
@@ -54,7 +54,7 @@ async function init() {
             updateIcon();
         }
         overlayWin.setAlwaysOnTop(true).catch(() => {});
-    }, 2000);
+    }, topmostInterval);
 
     // Setup drag detection
     setupDragDetection();
