@@ -195,7 +195,12 @@ function rebuildSyncList() {
         if (d.id === primaryId) continue;
         const isSynced = (config.sync_ids || []).includes(d.id);
         const label = document.createElement("label");
-        label.innerHTML = `<input type="checkbox" data-sync-id="${d.id}" ${isSynced ? "checked" : ""} /> ${d.name}`;
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.dataset.syncId = d.id;
+        checkbox.checked = isSynced;
+        label.appendChild(checkbox);
+        label.appendChild(document.createTextNode(" " + d.name));
         container.appendChild(label);
     }
 }
@@ -226,16 +231,36 @@ function rebuildHotkeyRows() {
 
         const row = document.createElement("div");
         row.className = "hotkey-row";
-        row.innerHTML = `
-      <label>${label}:</label>
-      <select class="select-input" data-hk-key="${key}">
-        ${options.map(([vk, name]) =>
-            `<option value="${vk}" ${currentVk === vk ? "selected" : ""}>${name}</option>`
-        ).join("")}
-      </select>
-      <button class="btn-sm" data-record-key="${key}" id="rec-${key}">Record</button>
-      <button class="btn-sm" data-clear-key="${key}">Clear</button>
-    `;
+
+        const lbl = document.createElement("label");
+        lbl.textContent = label + ":";
+        row.appendChild(lbl);
+
+        const select = document.createElement("select");
+        select.className = "select-input";
+        select.dataset.hkKey = key;
+        for (const [vk, name] of options) {
+            const opt = document.createElement("option");
+            opt.value = vk;
+            opt.textContent = name;
+            if (currentVk === vk) opt.selected = true;
+            select.appendChild(opt);
+        }
+        row.appendChild(select);
+
+        const recBtn = document.createElement("button");
+        recBtn.className = "btn-sm";
+        recBtn.dataset.recordKey = key;
+        recBtn.id = `rec-${key}`;
+        recBtn.textContent = "Record";
+        row.appendChild(recBtn);
+
+        const clearBtn = document.createElement("button");
+        clearBtn.className = "btn-sm";
+        clearBtn.dataset.clearKey = key;
+        clearBtn.textContent = "Clear";
+        row.appendChild(clearBtn);
+
         container.appendChild(row);
 
         row.querySelector(`[data-record-key="${key}"]`).addEventListener("click", async () => {
@@ -648,7 +673,7 @@ function startVuPoll() {
             const dbg = document.getElementById("debug-msg");
             if (dbg) dbg.textContent = "VU error: " + e;
         }
-    }, 50);
+    }, 100);
 }
 
 

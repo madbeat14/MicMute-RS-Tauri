@@ -73,8 +73,6 @@ pub fn set_run_on_startup(enable: bool) {
 fn create_startup_task() {
     let exe_path = env::current_exe().unwrap_or_else(|_| PathBuf::from("MicMuteRs.exe"));
     let exe_str = exe_path.to_string_lossy();
-    // In Rust we don't necessarily need quotes around args if we don't have spaces, but good practice
-    let _arguments = format!("\"{}\"", exe_str);
 
     let author = env::var("USERNAME").unwrap_or_else(|_| "Author".to_string());
 

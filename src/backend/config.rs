@@ -1,3 +1,4 @@
+use crate::constants;
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -213,6 +214,30 @@ impl AppConfig {
         }
     }
 
+    /// Clamp and sanitize config values to valid ranges.
+    fn validate(&mut self) {
+        self.afk.timeout = self.afk.timeout.clamp(
+            constants::MIN_AFK_TIMEOUT_S,
+            constants::MAX_AFK_TIMEOUT_S,
+        );
+        self.persistent_overlay.scale = self.persistent_overlay.scale.clamp(
+            10,
+            constants::MAX_OVERLAY_SCALE,
+        );
+        if self.osd.duration == 0 {
+            self.osd.duration = constants::DEFAULT_OSD_DURATION_MS;
+        }
+        if self.osd.size == 0 {
+            self.osd.size = constants::DEFAULT_OSD_SIZE;
+        }
+        if self.audio_mode != "beep" && self.audio_mode != "custom" {
+            self.audio_mode = "beep".to_string();
+        }
+        if self.hotkey_mode != "toggle" && self.hotkey_mode != "separate" {
+            self.hotkey_mode = "toggle".to_string();
+        }
+    }
+
     pub fn load() -> Self {
         if let Some(path) = Self::get_config_path() {
             if path.exists() {
@@ -227,6 +252,8 @@ impl AppConfig {
                             }
                         }
 
+                        config.validate();
+
                         if needs_save {
                             config.save();
                         }
@@ -240,9 +267,18 @@ impl AppConfig {
     }
 
     pub fn save(&self) {
-        if let Some(path) = Self::get_config_path() {
-            if let Ok(json) = serde_json::to_string_pretty(self) {
-                let _ = fs::write(path, json);
+        let Some(path) = Self::get_config_path() else {
+            tracing::error!("Could not determine config path");
+            return;
+        };
+        match serde_json::to_string_pretty(self) {
+            Ok(json) => {
+                if let Err(e) = fs::write(&path, json) {
+                    tracing::error!(path = %path.display(), error = %e, "Failed to write config");
+                }
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Config serialization failed");
             }
         }
     }

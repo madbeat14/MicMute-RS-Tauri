@@ -5,35 +5,36 @@ edition = "2024"
 
 [lib]
 name = "app_lib"
+path = "src/backend/lib.rs"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
 name = "mic-mute-rs"
-path = "src/main.rs"
+path = "src/backend/main.rs"
 
 [[bin]]
 name = "diagnostics"
-path = "src/bin/diagnostics.rs"
+path = "src/backend/bin/diagnostics.rs"
 
 [[bin]]
 name = "test_audio_playback"
-path = "src/bin/test_audio_playback.rs"
+path = "src/backend/bin/test_audio_playback.rs"
 
 [[bin]]
 name = "test_cx31993"
-path = "src/bin/test_cx31993.rs"
+path = "src/backend/bin/test_cx31993.rs"
 
 [[bin]]
 name = "test_direct_mute"
-path = "src/bin/test_direct_mute.rs"
+path = "src/backend/bin/test_direct_mute.rs"
 
 [[bin]]
 name = "test_meter"
-path = "src/bin/test_meter.rs"
+path = "src/backend/bin/test_meter.rs"
 
 [[bin]]
 name = "test_peak"
-path = "src/bin/test_peak.rs"
+path = "src/backend/bin/test_peak.rs"
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "image-ico"] }

@@ -375,8 +375,12 @@ pub async fn preview_audio_feedback(
 }
 
 /// Open a URL in the default browser.
+/// Only allows http/https schemes to prevent arbitrary command execution.
 #[tauri::command]
 pub async fn open_url(url: String) -> Result<(), String> {
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return Err("Only http/https URLs are allowed".to_string());
+    }
     open::that(&url).map_err(|e| e.to_string())
 }
 
@@ -392,10 +396,10 @@ pub async fn get_overlay_background_is_light(app: tauri::AppHandle) -> Result<bo
         // Convert tauri's HWND (windows 0.61) to our HWND (windows 0.58)
         // Both are transparent wrappers around *mut c_void
         let hwnd = HWND(tauri_hwnd.0);
-        Ok(crate::utils::is_background_light(hwnd))
+        Ok(crate::theme::is_background_light(hwnd))
     } else {
         // Fallback to system theme if overlay window not found
-        Ok(crate::utils::is_system_light_theme())
+        Ok(crate::theme::is_system_light_theme())
     }
 }
 

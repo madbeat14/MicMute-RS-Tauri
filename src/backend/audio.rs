@@ -18,6 +18,25 @@ use std::fs::File;
 use std::io::{BufReader, Cursor};
 use std::time::Duration;
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
+
+/// RAII guard for COM-allocated memory that must be freed with `CoTaskMemFree`.
+/// Prevents memory leaks if an early return or panic occurs before manual free.
+struct CoTaskMemGuard<T>(*mut T);
+
+impl<T> Drop for CoTaskMemGuard<T> {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                windows::Win32::System::Com::CoTaskMemFree(Some(
+                    self.0 as *const std::ffi::c_void,
+                ));
+            }
+        }
+    }
+}
+
+/// PROPVARIANT VT_LPWSTR type tag
+const VT_LPWSTR: u16 = 31;
 use windows::Win32::Media::Audio::Endpoints::{IAudioEndpointVolume, IAudioMeterInformation};
 use windows::Win32::Media::Audio::{
     AUDCLNT_SHAREMODE_SHARED, IAudioClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
@@ -28,8 +47,8 @@ use windows::Win32::System::Com::{
 };
 use windows::core::Result;
 
-const MUTE_WAV: &[u8] = include_bytes!("../ui/assets/mute.wav");
-const UNMUTE_WAV: &[u8] = include_bytes!("../ui/assets/unmute.wav");
+const MUTE_WAV: &[u8] = include_bytes!("../frontend/assets/mute.wav");
+const UNMUTE_WAV: &[u8] = include_bytes!("../frontend/assets/unmute.wav");
 
 /// Manages audio device control including mute state and peak metering.
 ///
@@ -79,8 +98,11 @@ impl AudioController {
             let mut audio_client = None;
             if let Ok(client) = device.Activate::<IAudioClient>(CLSCTX_ALL, None) {
                 if let Ok(fmt) = client.GetMixFormat() {
+                    // SAFETY: `fmt` was allocated by COM via GetMixFormat.
+                    // Guard ensures it is freed on scope exit regardless of control flow.
+                    let _fmt_guard = CoTaskMemGuard(fmt);
+
                     // Initialize and Start the client so the hardware starts feeding meter data
-                    // AUDCLNT_SHAREMODE_SHARED = 0
                     if client
                         .Initialize(AUDCLNT_SHAREMODE_SHARED, 0, AUDIO_CLIENT_BUFFER_DURATION_100NS, 0, fmt, None)
                         .is_ok()
@@ -91,9 +113,6 @@ impl AudioController {
                     } else {
                         tracing::error!("Failed to initialize AudioClient");
                     }
-                    windows::Win32::System::Com::CoTaskMemFree(Some(
-                        fmt as *const _ as *const std::ffi::c_void,
-                    ));
                 }
             }
 
@@ -123,58 +142,55 @@ impl AudioController {
         }
         tracing::debug!(mute = mute, "Set mute on main device");
 
-        // Sync logic mirroring python implementation
         if !config.sync_ids.is_empty() {
-            unsafe {
-                let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-                if let Ok(enumerator) = CoCreateInstance::<_, IMMDeviceEnumerator>(
-                    &MMDeviceEnumerator,
-                    None,
-                    CLSCTX_ALL,
-                ) {
-                    if let Ok(collection) = enumerator.EnumAudioEndpoints(
-                        windows::Win32::Media::Audio::eCapture,
-                        windows::Win32::Media::Audio::DEVICE_STATE_ACTIVE,
-                    ) {
-                        if let Ok(count) = collection.GetCount() {
-                            for i in 0..count {
-                                if let Ok(dev) = collection.Item(i) {
-                                    if let Ok(id_pwstr) = dev.GetId() {
-                                        let id_string = id_pwstr.to_string().unwrap_or_default();
-                                        if let Some(main_id) = &config.device_id {
-                                            if &id_string == main_id {
-                                                continue;
-                                            }
-                                        }
-                                        if config.sync_ids.contains(&id_string) {
-                                            if let Ok(vol) = dev
-                                                .Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None)
-                                            {
-                                                if let Err(e) = vol.SetMute(mute, std::ptr::null())
-                                                {
-                                                    tracing::error!(
-                                                        device_id = %id_string,
-                                                        error = ?e,
-                                                        "Failed to set mute state for sync device"
-                                                    );
-                                                } else {
-                                                    tracing::debug!(
-                                                        device_id = %id_string,
-                                                        mute = mute,
-                                                        "Synced mute state"
-                                                    );
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+            self.sync_mute_to_devices(mute, config);
+        }
+        Ok(())
+    }
+
+    /// Apply mute state to all configured sync devices, skipping the main device.
+    fn sync_mute_to_devices(&self, mute: bool, config: &AppConfig) {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            let Ok(enumerator) = CoCreateInstance::<_, IMMDeviceEnumerator>(
+                &MMDeviceEnumerator, None, CLSCTX_ALL,
+            ) else { return };
+            let Ok(collection) = enumerator.EnumAudioEndpoints(
+                windows::Win32::Media::Audio::eCapture,
+                windows::Win32::Media::Audio::DEVICE_STATE_ACTIVE,
+            ) else { return };
+            let Ok(count) = collection.GetCount() else { return };
+
+            for i in 0..count {
+                let Ok(dev) = collection.Item(i) else { continue };
+                let Ok(id_pwstr) = dev.GetId() else { continue };
+                let id_string = id_pwstr.to_string().unwrap_or_default();
+
+                if config.device_id.as_ref() == Some(&id_string) {
+                    continue;
+                }
+                if !config.sync_ids.contains(&id_string) {
+                    continue;
+                }
+
+                let Ok(vol) = dev.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None) else {
+                    continue;
+                };
+                if let Err(e) = vol.SetMute(mute, std::ptr::null()) {
+                    tracing::error!(
+                        device_id = %id_string,
+                        error = ?e,
+                        "Failed to set mute state for sync device"
+                    );
+                } else {
+                    tracing::debug!(
+                        device_id = %id_string,
+                        mute = mute,
+                        "Synced mute state"
+                    );
                 }
             }
         }
-        Ok(())
     }
 
     pub fn toggle_mute(&self, config: &AppConfig) -> Result<bool> {
@@ -232,7 +248,7 @@ pub fn play_feedback(stream_handle: &OutputStreamHandle, is_muted: bool, config:
                 // Check local assets (Priority for Rust version)
                 if let Ok(exe_path) = std::env::current_exe() {
                     if let Some(parent) = exe_path.parent() {
-                        let local_assets = parent.join("ui").join("assets").join(sound_cfg_file);
+                        let local_assets = parent.join("src").join("frontend").join("assets").join(sound_cfg_file);
                         if local_assets.exists() {
                             path_found = Some(local_assets);
                         }
@@ -241,7 +257,8 @@ pub fn play_feedback(stream_handle: &OutputStreamHandle, is_muted: bool, config:
                 if path_found.is_none() {
                     let cwd_assets = std::env::current_dir()
                         .unwrap_or_default()
-                        .join("ui")
+                        .join("src")
+                        .join("frontend")
                         .join("assets")
                         .join(sound_cfg_file);
                     if cwd_assets.exists() {
@@ -330,8 +347,7 @@ pub fn get_audio_devices() -> Result<Vec<(String, String)>> {
                         if let Ok(prop_var) = store.GetValue(&PKEY_Device_FriendlyName) {
                             let ptr = &prop_var as *const _ as *const u16;
                             let vt = *ptr;
-                            if vt == 31 {
-                                // VT_LPWSTR
+                            if vt == VT_LPWSTR {
                                 let wstr_ptr_addr = ptr.add(4) as *const *const u16;
                                 let wstr_ptr = *wstr_ptr_addr;
                                 if !wstr_ptr.is_null() {

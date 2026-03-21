@@ -4,7 +4,7 @@
     "version": "0.1.0",
     "identifier": "com.madbeat14.micmuters",
     "build": {
-        "frontendDist": "ui"
+        "frontendDist": "src/frontend"
     },
     "app": {
         "windows": [
@@ -62,7 +62,7 @@
         "active": true,
         "targets": "all",
         "icon": [
-            "ui/assets/mic_white.ico"
+            "src/frontend/assets/mic_white.ico"
         ],
         "windows": {
             "wix": {},

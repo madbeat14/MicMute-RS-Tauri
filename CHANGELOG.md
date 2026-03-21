@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+### Restructure — `src/backend/` + `src/frontend/` layout
+
+#### Folder Reorganization
+- **Move Rust backend** from `src/` to `src/backend/` — all `.rs` files, `bin/` directory
+- **Move vanilla JS frontend** from `ui/` to `src/frontend/` — HTML, JS, CSS, assets
+- **JS files into `src/frontend/js/`** — `main.js`, `overlay.js`, `osd.js` moved to subdirectory
+- **Delete leftover `frontend/`** — React/TypeScript migration remnants (node_modules, dist, etc.)
+- **Clean up Python files** — removed `__pycache__` and `.py` test files from `bin/`
+
+#### Module Extraction
+- **New `theme.rs`** — extracted `is_system_light_theme()` and `is_background_light()` from `utils.rs`
+- **Slimmed `utils.rs`** — now contains only `get_idle_duration`, `vk_to_string`, `set_click_through`, `force_topmost`
+
+#### Bug Fixes
+- **Fix COLORREF byte-order bug** in `is_background_light()` — was reading `0x00RRGGBB` instead of correct `0x00BBGGRR`, causing wrong overlay theme on colored backgrounds
+- **Add COM memory RAII guard** (`CoTaskMemGuard`) in `audio.rs` — prevents leak if early return occurs after `GetMixFormat()`
+- **Add URL scheme validation** in `open_url` command — only allows `http://` and `https://`
+- **Add config validation** (`validate()` method) — clamps AFK timeout, overlay scale, OSD values to safe ranges
+- **Log config save errors** instead of silently swallowing them
+
+#### Code Quality
+- **Replace magic number** `31` with named constant `VT_LPWSTR` in device enumeration
+- **Flatten nested sync logic** — `sync_mute_to_devices()` extracted with early-return pattern
+- **Replace innerHTML with DOM APIs** in `main.js` — prevents potential XSS in `rebuildSyncList` and `rebuildHotkeyRows`
+- **Reduce VU poll intervals** — settings 50ms→100ms, overlay 60ms→100ms
+
 ### Performance - RAM & CPU Optimization
 
 #### Memory Leak Fixes

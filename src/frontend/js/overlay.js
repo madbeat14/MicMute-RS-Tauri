@@ -197,7 +197,7 @@ function startVuPoll() {
             const threshold = (config.persistent_overlay.sensitivity ?? 5) / 100;
             dot.classList.toggle("active", s.peak_level > threshold);
         } catch (_) { }
-    }, 60);
+    }, 100);
 }
 
 // Initialize the overlay script once the DOM is fully loaded.

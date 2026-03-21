@@ -5,6 +5,7 @@ pub mod config;
 pub mod constants;
 pub mod hotkey;
 pub mod startup;
+pub mod theme;
 pub mod utils;
 
 use crate::constants::DEFAULT_HOTKEY_VK;
@@ -143,10 +144,10 @@ pub(crate) fn build_tray_menu<M: Manager<tauri::Wry>>(
 
 pub fn load_tray_icon(is_muted: bool, is_light: bool) -> Image<'static> {
     let bytes: &[u8] = match (is_muted, is_light) {
-        (true, true) => include_bytes!("../ui/assets/mic_muted_black.ico"),
-        (false, true) => include_bytes!("../ui/assets/mic_black.ico"),
-        (true, false) => include_bytes!("../ui/assets/mic_muted_white.ico"),
-        (false, false) => include_bytes!("../ui/assets/mic_white.ico"),
+        (true, true) => include_bytes!("../frontend/assets/mic_muted_black.ico"),
+        (false, true) => include_bytes!("../frontend/assets/mic_black.ico"),
+        (true, false) => include_bytes!("../frontend/assets/mic_muted_white.ico"),
+        (false, false) => include_bytes!("../frontend/assets/mic_white.ico"),
     };
     // SAFETY: include_bytes! is compile-time verified, so this should never fail.
     // Using unwrap() here because a failure indicates a build/packaging issue.
@@ -275,7 +276,7 @@ pub fn run() {
         })
         .setup(move |app| {
             // ── System tray ──
-            let is_light = utils::is_system_light_theme();
+            let is_light = theme::is_system_light_theme();
             let tray_icon = load_tray_icon(is_muted, is_light);
             let tray_menu = build_tray_menu(app, &cfg, &devices);
 
@@ -571,7 +572,7 @@ pub fn do_set_mute(app: &AppHandle, mute: bool) {
 }
 
 pub fn update_tray_icon(app: &AppHandle, is_muted: bool) {
-    let is_light = utils::is_system_light_theme();
+    let is_light = theme::is_system_light_theme();
     let icon = load_tray_icon(is_muted, is_light);
     if let Some(tray) = app.tray_by_id("main") {
         let _ = tray.set_icon(Some(icon));
