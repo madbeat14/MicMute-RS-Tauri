@@ -4,25 +4,34 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 
-use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, TranslateMessage,
     HHOOK, KBDLLHOOKSTRUCT, MSG, SetWindowsHookExW, UnhookWindowsHookEx,
     WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
-/// Custom message ID used to tell the hook thread to reinstall its hook.
-/// WM_APP range (0x8000..0xBFFF) is reserved for private use.
+// ── Custom thread messages (WM_APP range 0x8000..0xBFFF) ──
+/// Tell hook thread to reinstall the LL hook.
 const WM_REINSTALL_HOOK: u32 = 0x8001;
+/// Tell hook thread to re-sync RegisterHotKey registrations with TARGET_VKS.
+const WM_SYNC_HOTKEYS: u32 = 0x8002;
+/// Standard Windows WM_HOTKEY message (fired by RegisterHotKey).
+const WM_HOTKEY: u32 = 0x0312;
+/// MOD_NOREPEAT flag — don't send repeated WM_HOTKEY while key is held.
+const MOD_NOREPEAT: u32 = 0x4000;
 
 static HOTKEY_SENDER: OnceLock<Sender<u32>> = OnceLock::new();
 static RECORDING_MODE: AtomicBool = AtomicBool::new(false);
 static RECORD_SENDER: OnceLock<Sender<u32>> = OnceLock::new();
 static HOOK_THREAD_ID: AtomicU32 = AtomicU32::new(0);
-// Stores the raw value of the currently installed HHOOK so it can be replaced
 static HOOK_HANDLE: AtomicIsize = AtomicIsize::new(0);
 
 static TARGET_VKS: [AtomicU32; 3] = [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)];
+
+/// Tick count (ms) of the last VK sent by the LL hook callback.
+/// Used to deduplicate if both LL hook and RegisterHotKey fire for the same keypress.
+static LAST_LL_SEND_TICK: AtomicU32 = AtomicU32::new(0);
 
 pub struct HotkeyManager {
     receiver: Receiver<u32>,
@@ -48,7 +57,8 @@ impl HotkeyManager {
     }
 
     /// Spawns the dedicated hook thread and installs the global hook.
-    /// This should be called exactly once.
+    /// Also registers hotkeys via RegisterHotKey as a backup for when
+    /// the LL hook is silently removed during modal menu loops.
     pub fn start_hook(&self) {
         if HOOK_THREAD_ID.load(Ordering::SeqCst) != 0 {
             return;
@@ -64,17 +74,46 @@ impl HotkeyManager {
                     windows::Win32::System::Threading::THREAD_PRIORITY_TIME_CRITICAL,
                 );
             }
+
+            // Primary: low-level keyboard hook
             install_hook();
+            // Backup: RegisterHotKey (works during modal menu loops)
+            sync_registered_hotkeys();
+
             unsafe {
                 let mut msg = MSG::default();
                 while GetMessageW(&mut msg, None, 0, 0).into() {
-                    if msg.message == WM_REINSTALL_HOOK {
-                        // Reinstall the hook to recover from silent removal by Windows
-                        install_hook();
-                        continue;
+                    match msg.message {
+                        WM_REINSTALL_HOOK => {
+                            install_hook();
+                            sync_registered_hotkeys();
+                        }
+                        WM_SYNC_HOTKEYS => {
+                            sync_registered_hotkeys();
+                        }
+                        WM_HOTKEY => {
+                            // RegisterHotKey backup fired — the LL hook didn't catch this key.
+                            // Deduplicate: if the LL hook already sent this VK within 100ms, skip.
+                            let id = msg.wParam.0 as usize;
+                            if id >= 1 && id <= 3 {
+                                let vk = TARGET_VKS[id - 1].load(Ordering::SeqCst);
+                                if vk != 0 && !RECORDING_MODE.load(Ordering::SeqCst) {
+                                    let now =
+                                        windows::Win32::System::SystemInformation::GetTickCount();
+                                    let last = LAST_LL_SEND_TICK.load(Ordering::SeqCst);
+                                    if now.saturating_sub(last) > 100 {
+                                        if let Some(sender) = HOTKEY_SENDER.get() {
+                                            let _ = sender.send(vk);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => {
+                            let _ = TranslateMessage(&msg);
+                            DispatchMessageW(&msg);
+                        }
                     }
-                    let _ = TranslateMessage(&msg);
-                    DispatchMessageW(&msg);
                 }
             }
         });
@@ -85,27 +124,28 @@ impl HotkeyManager {
             let val = if i < vks.len() { vks[i] } else { 0 };
             TARGET_VKS[i].store(val, Ordering::SeqCst);
         }
-    }
-
-    /// Ask the hook thread to reinstall the keyboard hook.
-    /// Windows can silently remove WH_KEYBOARD_LL hooks when the hook
-    /// procedure doesn't respond within the system timeout (e.g., during
-    /// a tray context menu modal loop). Calling this periodically ensures
-    /// the hook stays active.
-    pub fn ensure_hook_active(&self) {
+        // Tell hook thread to update RegisterHotKey registrations
         let tid = HOOK_THREAD_ID.load(Ordering::SeqCst);
         if tid != 0 {
             unsafe {
                 windows::Win32::UI::WindowsAndMessaging::PostThreadMessageW(
-                    tid,
-                    WM_REINSTALL_HOOK,
-                    WPARAM(0),
-                    LPARAM(0),
+                    tid, WM_SYNC_HOTKEYS, WPARAM(0), LPARAM(0),
                 ).ok();
             }
         }
     }
 
+    /// Ask the hook thread to reinstall the keyboard hook and re-register hotkeys.
+    pub fn ensure_hook_active(&self) {
+        let tid = HOOK_THREAD_ID.load(Ordering::SeqCst);
+        if tid != 0 {
+            unsafe {
+                windows::Win32::UI::WindowsAndMessaging::PostThreadMessageW(
+                    tid, WM_REINSTALL_HOOK, WPARAM(0), LPARAM(0),
+                ).ok();
+            }
+        }
+    }
 
     pub fn try_recv(&self) -> Option<u32> {
         self.receiver.try_recv().ok()
@@ -131,16 +171,14 @@ impl HotkeyManager {
     }
 }
 
-/// Installs (or re-installs) the WH_KEYBOARD_LL hook.
-/// Removes any previously installed hook first.
+// ── Low-level keyboard hook (primary mechanism) ──
+
 fn install_hook() {
     unsafe {
-        // Remove old hook if present
         let old = HOOK_HANDLE.swap(0, Ordering::SeqCst);
         if old != 0 {
             let _ = UnhookWindowsHookEx(HHOOK(old as *mut _));
         }
-        // Install new hook
         if let Ok(hook) = SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_callback), None, 0) {
             HOOK_HANDLE.store(hook.0 as isize, Ordering::SeqCst);
         }
@@ -160,11 +198,9 @@ unsafe extern "system" fn hook_callback(n_code: i32, w_param: WPARAM, l_param: L
                 if is_down {
                     if let Some(sender) = RECORD_SENDER.get() {
                         let _ = sender.send(kbd_struct.vkCode);
-                        // Consume the keypress during recording
                         return windows::Win32::Foundation::LRESULT(1);
                     }
                 } else if is_up {
-                    // Also swallow the UP event during recording to prevent accidental triggers
                     return windows::Win32::Foundation::LRESULT(1);
                 }
             } else {
@@ -174,9 +210,13 @@ unsafe extern "system" fn hook_callback(n_code: i32, w_param: WPARAM, l_param: L
                         if is_down {
                             if let Some(sender) = HOTKEY_SENDER.get() {
                                 let _ = sender.send(kbd_struct.vkCode);
+                                // Record tick for dedup with RegisterHotKey backup
+                                let tick = unsafe {
+                                    windows::Win32::System::SystemInformation::GetTickCount()
+                                };
+                                LAST_LL_SEND_TICK.store(tick, Ordering::SeqCst);
                             }
                         }
-                        // Always swallow both DOWN and UP for matched hotkeys
                         return windows::Win32::Foundation::LRESULT(1);
                     }
                 }
@@ -184,4 +224,35 @@ unsafe extern "system" fn hook_callback(n_code: i32, w_param: WPARAM, l_param: L
         }
     }
     unsafe { CallNextHookEx(None, n_code, w_param, l_param) }
+}
+
+// ── RegisterHotKey backup (works during modal menu loops) ──
+
+/// Unregister all previous hotkeys and re-register current TARGET_VKS.
+/// Must be called from the hook thread (RegisterHotKey is thread-affine).
+fn sync_registered_hotkeys() {
+    unsafe {
+        // Unregister old (ids 1..=3)
+        for i in 0..TARGET_VKS.len() {
+            let _ = windows::Win32::UI::Input::KeyboardAndMouse::UnregisterHotKey(
+                HWND(std::ptr::null_mut()),
+                (i + 1) as i32,
+            );
+        }
+        // Register current targets
+        for (i, target_atomic) in TARGET_VKS.iter().enumerate() {
+            let vk = target_atomic.load(Ordering::SeqCst);
+            if vk != 0 {
+                let result = windows::Win32::UI::Input::KeyboardAndMouse::RegisterHotKey(
+                    HWND(std::ptr::null_mut()),
+                    (i + 1) as i32,
+                    windows::Win32::UI::Input::KeyboardAndMouse::HOT_KEY_MODIFIERS(MOD_NOREPEAT),
+                    vk,
+                );
+                if let Err(e) = result {
+                    tracing::warn!(vk = vk, error = ?e, "RegisterHotKey failed (key may be reserved by another app)");
+                }
+            }
+        }
+    }
 }
