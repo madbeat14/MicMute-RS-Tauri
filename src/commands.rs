@@ -56,7 +56,7 @@ pub async fn toggle_mute(
     let cfg = state.config.lock().unwrap().clone();
     let (muted, peak, stream_handle) = {
         let audio = state.audio.lock().unwrap();
-        let (m, _) = audio.toggle_mute(&cfg).map_err(|e| e.to_string())?;
+        let m = audio.toggle_mute(&cfg).map_err(|e| e.to_string())?;
         let p = audio.get_peak_value().unwrap_or(0.0);
         let sh = audio.stream_handle();
         (m, p, sh)
@@ -66,8 +66,10 @@ pub async fn toggle_mute(
     crate::emit_state(&app, muted, peak);
     crate::trigger_osd(&app, muted);
 
-    std::thread::spawn(move || {
-        crate::audio::play_feedback(&stream_handle, muted, &cfg);
+    let _ = state.audio_feedback_tx.send(crate::AudioFeedbackMsg {
+        stream_handle,
+        is_muted: muted,
+        config: cfg,
     });
 
     Ok(AppStateDto {
@@ -100,8 +102,10 @@ pub async fn set_mute(
         crate::emit_state(&app, muted, peak);
         crate::trigger_osd(&app, muted);
 
-        std::thread::spawn(move || {
-            crate::audio::play_feedback(&stream_handle, muted, &cfg);
+        let _ = state.audio_feedback_tx.send(crate::AudioFeedbackMsg {
+            stream_handle,
+            is_muted: muted,
+            config: cfg,
         });
 
         Ok(AppStateDto {
@@ -259,13 +263,6 @@ pub async fn update_config(
 #[tauri::command]
 pub async fn get_cached_devices(state: State<'_, Arc<AppState>>) -> Result<Vec<DeviceDto>, String> {
     let devs = state.available_devices.lock().unwrap().clone();
-    eprintln!(
-        "[DEBUG] get_cached_devices: returning {} devices",
-        devs.len()
-    );
-    for (id, name) in &devs {
-        eprintln!("[DEBUG]   device: {} -> {}", name, id);
-    }
     Ok(devs
         .into_iter()
         .map(|(id, name)| DeviceDto { id, name })
@@ -368,8 +365,10 @@ pub async fn preview_audio_feedback(
     let mut preview_cfg = temp_config;
     preview_cfg.audio_mode = mode;
 
-    std::thread::spawn(move || {
-        crate::audio::play_feedback(&stream_handle, key == "mute", &preview_cfg);
+    let _ = state.audio_feedback_tx.send(crate::AudioFeedbackMsg {
+        stream_handle,
+        is_muted: key == "mute",
+        config: preview_cfg,
     });
 
     Ok(())

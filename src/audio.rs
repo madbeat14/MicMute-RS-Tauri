@@ -116,13 +116,12 @@ impl AudioController {
         Ok(muted.as_bool())
     }
 
-    pub fn set_mute(&self, mute: bool, config: &AppConfig) -> Result<String> {
-        let mut debug_msg = String::new();
+    pub fn set_mute(&self, mute: bool, config: &AppConfig) -> Result<()> {
         if let Err(e) = unsafe { self.volume.SetMute(mute, std::ptr::null()) } {
             tracing::error!(error = ?e, mute = mute, "Failed to set mute state");
             return Err(e);
         }
-        debug_msg.push_str(&format!("Muted Main: {}; ", mute));
+        tracing::debug!(mute = mute, "Set mute on main device");
 
         // Sync logic mirroring python implementation
         if !config.sync_ids.is_empty() {
@@ -159,10 +158,11 @@ impl AudioController {
                                                         "Failed to set mute state for sync device"
                                                     );
                                                 } else {
-                                                    debug_msg.push_str(&format!(
-                                                        "Sync {}: {}; ",
-                                                        id_string, mute
-                                                    ));
+                                                    tracing::debug!(
+                                                        device_id = %id_string,
+                                                        mute = mute,
+                                                        "Synced mute state"
+                                                    );
                                                 }
                                             }
                                         }
@@ -174,15 +174,14 @@ impl AudioController {
                 }
             }
         }
-        Ok(debug_msg)
+        Ok(())
     }
 
-    pub fn toggle_mute(&self, config: &AppConfig) -> Result<(bool, String)> {
+    pub fn toggle_mute(&self, config: &AppConfig) -> Result<bool> {
         let current = self.is_muted()?;
         let new_state = !current;
-        let mut debug = self.set_mute(new_state, config)?;
-        debug.push_str(&format!("Current is_muted() reads: {}", new_state));
-        Ok((new_state, debug))
+        self.set_mute(new_state, config)?;
+        Ok(new_state)
     }
 
     pub fn get_peak_value(&self) -> Result<f32> {
@@ -198,23 +197,27 @@ impl AudioController {
     }
 }
 
-pub fn play_feedback(stream_handle: &OutputStreamHandle, is_muted: bool, config: &AppConfig) {
+/// Play audio feedback and return the Sink so the caller can keep it alive.
+/// When the returned Sink is dropped, playback stops immediately — this lets
+/// the worker thread cancel a previous sound by simply replacing it.
+pub fn play_feedback(stream_handle: &OutputStreamHandle, is_muted: bool, config: &AppConfig) -> Option<Sink> {
     if !config.beep_enabled {
-        return;
+        return None;
     }
 
     let key = if is_muted { "mute" } else { "unmute" };
 
     if config.audio_mode == "beep" {
         if let Some(beep_cfg) = config.beep_mode_configs.get(key) {
-            let sink = Sink::try_new(stream_handle).unwrap();
-            for _ in 0..beep_cfg.count {
-                let source = SineWave::new(beep_cfg.freq as f32)
-                    .take_duration(Duration::from_millis(beep_cfg.duration as u64))
-                    .amplify(0.2);
-                sink.append(source);
+            if let Ok(sink) = Sink::try_new(stream_handle) {
+                for _ in 0..beep_cfg.count {
+                    let source = SineWave::new(beep_cfg.freq as f32)
+                        .take_duration(Duration::from_millis(beep_cfg.duration as u64))
+                        .amplify(0.2);
+                    sink.append(source);
+                }
+                return Some(sink);
             }
-            sink.detach();
         }
     } else {
         // "custom" mode
@@ -262,13 +265,16 @@ pub fn play_feedback(stream_handle: &OutputStreamHandle, is_muted: bool, config:
                 }
             }
 
+            let volume = (sound_cfg.volume as f32) / 100.0;
+
             if let Some(valid_path) = path_found {
                 if let Ok(file) = File::open(&valid_path) {
                     if let Ok(source) = rodio::Decoder::new(BufReader::new(file)) {
-                        let sink = Sink::try_new(stream_handle).unwrap();
-                        sink.set_volume((sound_cfg.volume as f32) / 100.0);
-                        sink.append(source);
-                        sink.detach();
+                        if let Ok(sink) = Sink::try_new(stream_handle) {
+                            sink.set_volume(volume);
+                            sink.append(source);
+                            return Some(sink);
+                        }
                     } else {
                         tracing::error!(path = ?valid_path, "Failed to decode audio file");
                     }
@@ -283,24 +289,24 @@ pub fn play_feedback(stream_handle: &OutputStreamHandle, is_muted: bool, config:
 
                 let bytes = if key == "mute" { MUTE_WAV } else { UNMUTE_WAV };
                 if let Ok(source) = rodio::Decoder::new(Cursor::new(bytes)) {
-                    let sink = Sink::try_new(stream_handle).unwrap();
-                    sink.set_volume((sound_cfg.volume as f32) / 100.0);
-                    sink.append(source);
-                    sink.detach();
-                } else {
-                    // Final fallback to beep if even embedded decode fails (shouldn't happen)
-                    if let Some(beep_cfg) = config.beep_mode_configs.get(key) {
-                        let sink = Sink::try_new(stream_handle).unwrap();
+                    if let Ok(sink) = Sink::try_new(stream_handle) {
+                        sink.set_volume(volume);
+                        sink.append(source);
+                        return Some(sink);
+                    }
+                } else if let Some(beep_cfg) = config.beep_mode_configs.get(key) {
+                    if let Ok(sink) = Sink::try_new(stream_handle) {
                         let source = SineWave::new(beep_cfg.freq as f32)
                             .take_duration(Duration::from_millis(beep_cfg.duration as u64))
                             .amplify(0.2);
                         sink.append(source);
-                        sink.detach();
+                        return Some(sink);
                     }
                 }
             }
         }
     }
+    None
 }
 pub fn get_audio_devices() -> Result<Vec<(String, String)>> {
     unsafe {

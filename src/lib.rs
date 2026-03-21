@@ -9,6 +9,7 @@ pub mod utils;
 
 use crate::constants::DEFAULT_HOTKEY_VK;
 use std::sync::{Arc, Mutex};
+use std::sync::mpsc as std_mpsc;
 use tracing;
 use tauri::{
     AppHandle, Emitter, Manager,
@@ -16,6 +17,13 @@ use tauri::{
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
+
+/// Message sent to the audio feedback worker thread.
+struct AudioFeedbackMsg {
+    stream_handle: rodio::OutputStreamHandle,
+    is_muted: bool,
+    config: config::AppConfig,
+}
 
 // ─────────────────────────────────────────
 //  Shared application state
@@ -26,6 +34,9 @@ pub struct AppState {
     pub hotkeys: Mutex<hotkey::HotkeyManager>,
     pub is_muted: Mutex<bool>,
     pub available_devices: Mutex<Vec<(String, String)>>,
+    /// Channel to send audio feedback work to a single persistent worker thread,
+    /// avoiding per-toggle thread spawns (~1MB stack each).
+    audio_feedback_tx: std_mpsc::Sender<AudioFeedbackMsg>,
 }
 
 /// # Safety Invariants
@@ -175,7 +186,7 @@ pub fn run() {
     unsafe {
         let _ = windows::Win32::System::Threading::SetPriorityClass(
             windows::Win32::System::Threading::GetCurrentProcess(),
-            windows::Win32::System::Threading::HIGH_PRIORITY_CLASS,
+            windows::Win32::System::Threading::ABOVE_NORMAL_PRIORITY_CLASS,
         );
     }
 
@@ -223,6 +234,22 @@ pub fn run() {
     }
     let hotkey_mgr = hotkey::HotkeyManager::new(initial_vks);
 
+    // ── Audio feedback worker thread (replaces per-toggle thread spawns) ──
+    let (audio_tx, audio_rx) = std_mpsc::channel::<AudioFeedbackMsg>();
+    std::thread::Builder::new()
+        .name("audio-feedback".into())
+        .stack_size(256 * 1024) // 256KB is plenty for audio playback
+        .spawn(move || {
+            // Holds the currently-playing Sink. When a new message arrives,
+            // this gets replaced — dropping the old Sink stops its playback
+            // immediately, so rapid toggles never queue up.
+            let mut _active_sink: Option<rodio::Sink> = None;
+            for msg in audio_rx {
+                _active_sink = audio::play_feedback(&msg.stream_handle, msg.is_muted, &msg.config);
+            }
+        })
+        .expect("failed to spawn audio feedback worker");
+
     // ── Shared state ──
     let state = Arc::new(AppState {
         audio: Mutex::new(audio_ctrl),
@@ -230,6 +257,7 @@ pub fn run() {
         hotkeys: Mutex::new(hotkey_mgr),
         is_muted: Mutex::new(is_muted),
         available_devices: Mutex::new(devices.clone()),
+        audio_feedback_tx: audio_tx,
     });
 
     tauri::Builder::default()
@@ -331,50 +359,61 @@ pub fn run() {
                 }
                 let state = state_for_thread;
                 let mut topmost_counter: u32 = 0;
+                let mut afk_counter: u32 = 0;
+
+                // Cache hotkey config as plain values to avoid cloning HashMap every iteration.
+                // These are refreshed from config periodically (every ~500ms).
+                let extract_vk = |val: &serde_json::Value| -> u32 {
+                    val.get("vk").and_then(|v| v.as_u64()).unwrap_or(0) as u32
+                };
+                let refresh_hotkey_cache = |st: &config::AppConfig| -> (bool, u32, u32, u32) {
+                    let is_toggle = st.hotkey_mode == "toggle";
+                    let toggle_vk = st.hotkey.get("toggle").map(|v| extract_vk(v)).unwrap_or(0);
+                    let mute_vk = st.hotkey.get("mute").map(|v| extract_vk(v)).unwrap_or(0);
+                    let unmute_vk = st.hotkey.get("unmute").map(|v| extract_vk(v)).unwrap_or(0);
+                    (is_toggle, toggle_vk, mute_vk, unmute_vk)
+                };
+
+                let st = state.config.lock().unwrap();
+                let hk_init = refresh_hotkey_cache(&st);
+                let mut cached_is_toggle = hk_init.0;
+                let mut cached_toggle_vk = hk_init.1;
+                let mut cached_mute_vk = hk_init.2;
+                let mut cached_unmute_vk = hk_init.3;
+                let mut cached_afk_enabled = st.afk.enabled;
+                let mut cached_afk_timeout = st.afk.timeout;
+                #[allow(unused_assignments)]
+                let mut cached_overlay_enabled = st.persistent_overlay.enabled;
+                drop(st);
+
+                // AFK check interval (~1 second at 10ms polling)
+                const AFK_CHECK_TICKS: u32 = 100;
+                let topmost_ticks = (constants::OVERLAY_TOPMOST_INTERVAL_MS / constants::HOTKEY_POLL_INTERVAL_MS) as u32;
+
                 loop {
+                    // ── Process hotkey events (no config lock needed) ──
                     {
-                        let st = state.config.lock().unwrap();
-                        let mode = st.hotkey_mode.clone();
-                        let hotkey_cfg = st.hotkey.clone();
-                        drop(st);
-
-                        let mut vks_to_process = Vec::new();
-                        {
-                            let hk = state.hotkeys.lock().unwrap();
-                            while let Some(vk) = hk.try_recv() {
-                                vks_to_process.push(vk);
-                            }
-                        }
-
-                        let get_vk = |val: &serde_json::Value| -> u32 {
-                            val.get("vk").and_then(|v| v.as_u64()).unwrap_or(0) as u32
-                        };
-
-                        for vk in vks_to_process {
-                            if mode == "toggle" {
-                                if hotkey_cfg.get("toggle").map(|v| get_vk(v)).unwrap_or(0) == vk {
+                        let hk = state.hotkeys.lock().unwrap();
+                        while let Some(vk) = hk.try_recv() {
+                            if cached_is_toggle {
+                                if cached_toggle_vk == vk {
                                     do_toggle_mute(&app_handle);
                                 }
-                            } else {
-                                let m_vk = hotkey_cfg.get("mute").map(|v| get_vk(v)).unwrap_or(0);
-                                let u_vk = hotkey_cfg.get("unmute").map(|v| get_vk(v)).unwrap_or(0);
-                                
-                                if m_vk == u_vk && m_vk == vk {
-                                    // Collision: Mute and Unmute mapped to the same key -> Toggle
-                                    do_toggle_mute(&app_handle);
-                                } else if m_vk == vk {
-                                    do_set_mute(&app_handle, true);
-                                } else if u_vk == vk {
-                                    do_set_mute(&app_handle, false);
-                                }
+                            } else if cached_mute_vk == cached_unmute_vk && cached_mute_vk == vk {
+                                do_toggle_mute(&app_handle);
+                            } else if cached_mute_vk == vk {
+                                do_set_mute(&app_handle, true);
+                            } else if cached_unmute_vk == vk {
+                                do_set_mute(&app_handle, false);
                             }
                         }
                     }
 
-                    // ── AFK Logic ──
-                    {
-                        let st = state.config.lock().unwrap();
-                        if st.afk.enabled {
+                    // ── AFK Logic (check every ~1s, not every 10ms) ──
+                    afk_counter += 1;
+                    if afk_counter >= AFK_CHECK_TICKS {
+                        afk_counter = 0;
+                        if cached_afk_enabled {
                             let mut lii =
                                 windows::Win32::UI::Input::KeyboardAndMouse::LASTINPUTINFO {
                                     cbSize: std::mem::size_of::<
@@ -392,25 +431,34 @@ pub fn run() {
                             };
                             let elapsed_ms = tick.saturating_sub(lii.dwTime);
 
-                            if elapsed_ms > (st.afk.timeout * 1000) {
+                            if elapsed_ms > (cached_afk_timeout * 1000) {
                                 let is_muted = *state.is_muted.lock().unwrap();
                                 if !is_muted {
-                                    drop(st); // drop lock before mutation
                                     do_set_mute(&app_handle, true);
                                 }
                             }
                         }
                     }
 
-                    // Re-assert overlay HWND_TOPMOST periodically
+                    // ── Periodic cache refresh + overlay topmost ──
                     topmost_counter += 1;
-                    let topmost_ticks = (constants::OVERLAY_TOPMOST_INTERVAL_MS / constants::HOTKEY_POLL_INTERVAL_MS) as u32;
                     if topmost_counter >= topmost_ticks {
                         topmost_counter = 0;
-                        let overlay_enabled = {
-                            state.config.lock().unwrap().persistent_overlay.enabled
-                        };
-                        if overlay_enabled {
+
+                        // Refresh cached config values (~every 500ms)
+                        {
+                            let st = state.config.lock().unwrap();
+                            let new_cache = refresh_hotkey_cache(&st);
+                            cached_is_toggle = new_cache.0;
+                            cached_toggle_vk = new_cache.1;
+                            cached_mute_vk = new_cache.2;
+                            cached_unmute_vk = new_cache.3;
+                            cached_afk_enabled = st.afk.enabled;
+                            cached_afk_timeout = st.afk.timeout;
+                            cached_overlay_enabled = st.persistent_overlay.enabled;
+                        }
+
+                        if cached_overlay_enabled {
                             if let Some(win) = app_handle.get_webview_window("overlay") {
                                 if let Ok(tauri_hwnd) = win.hwnd() {
                                     use windows::Win32::Foundation::HWND;
@@ -461,7 +509,7 @@ pub fn do_toggle_mute(app: &AppHandle) {
 
     let (success_m, peak, stream_handle) = {
         let audio = state.audio.lock().unwrap();
-        if let Ok((m, _debug)) = audio.toggle_mute(&cfg) {
+        if let Ok(m) = audio.toggle_mute(&cfg) {
             let p = audio.get_peak_value().unwrap_or(0.0);
             (Some(m), p, Some(audio.stream_handle()))
         } else {
@@ -476,8 +524,10 @@ pub fn do_toggle_mute(app: &AppHandle) {
         trigger_osd(app, m);
 
         if let Some(sh) = stream_handle {
-            std::thread::spawn(move || {
-                audio::play_feedback(&sh, m, &cfg);
+            let _ = state.audio_feedback_tx.send(AudioFeedbackMsg {
+                stream_handle: sh,
+                is_muted: m,
+                config: cfg,
             });
         }
     }
@@ -504,8 +554,10 @@ pub fn do_set_mute(app: &AppHandle, mute: bool) {
         trigger_osd(app, mute);
 
         if let Some(sh) = stream_handle {
-            std::thread::spawn(move || {
-                audio::play_feedback(&sh, mute, &cfg);
+            let _ = state.audio_feedback_tx.send(AudioFeedbackMsg {
+                stream_handle: sh,
+                is_muted: mute,
+                config: cfg,
             });
         }
     }
@@ -518,6 +570,9 @@ pub fn update_tray_icon(app: &AppHandle, is_muted: bool) {
         let _ = tray.set_icon(Some(icon));
     }
 }
+
+/// Tracks the latest OSD hide generation to cancel stale hides.
+static OSD_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub fn trigger_osd(app: &AppHandle, is_muted: bool) {
     let state: tauri::State<Arc<AppState>> = app.state();
@@ -560,12 +615,16 @@ pub fn trigger_osd(app: &AppHandle, is_muted: bool) {
             serde_json::json!({ "is_muted": is_muted, "duration": duration, "opacity": opacity }),
         );
 
-        // Auto-hide after duration
+        // Bump generation and schedule hide; stale generations are ignored.
+        let generation = OSD_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
         let win_clone = osd_win.clone();
         let dur = std::time::Duration::from_millis(duration as u64);
         std::thread::spawn(move || {
             std::thread::sleep(dur);
-            let _ = win_clone.hide();
+            // Only hide if no newer OSD was triggered in the meantime
+            if OSD_GENERATION.load(std::sync::atomic::Ordering::SeqCst) == generation {
+                let _ = win_clone.hide();
+            }
         });
     }
 }

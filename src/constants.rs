@@ -8,8 +8,8 @@
 pub const DEFAULT_HOTKEY_VK: u32 = 0xB3;
 
 /// Audio client buffer duration in 100-nanosecond units
-/// Value of 10,000,000 = 1 second
-pub const AUDIO_CLIENT_BUFFER_DURATION_100NS: i64 = 10_000_000;
+/// Value of 1,000,000 = 100ms (sufficient for peak meter data feed)
+pub const AUDIO_CLIENT_BUFFER_DURATION_100NS: i64 = 1_000_000;
 
 /// Milliseconds per second for time conversions
 pub const MS_PER_SECOND: u32 = 1000;
