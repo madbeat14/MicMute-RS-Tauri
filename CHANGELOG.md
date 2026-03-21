@@ -24,3 +24,6 @@
 
 #### Audio Feedback Fix
 - **Instant sound on rapid toggles**: Audio feedback no longer queues up when clicking rapidly. `play_feedback` returns the `Sink` to the worker thread, which holds it alive until the next toggle arrives — dropping the old Sink instantly stops the previous sound and starts the new one with no delay.
+
+#### Hotkey Reliability Fix
+- **Reinstall keyboard hook periodically**: Windows can silently remove `WH_KEYBOARD_LL` hooks when the hook thread doesn't respond within the system timeout (e.g., during a tray context menu modal loop). The hook is now reinstalled every ~500ms via a custom `WM_REINSTALL_HOOK` message posted to the hook thread, ensuring hotkeys keep working even while the tray menu is open.

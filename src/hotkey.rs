@@ -11,6 +11,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
+/// Custom message ID used to tell the hook thread to reinstall its hook.
+/// WM_APP range (0x8000..0xBFFF) is reserved for private use.
+const WM_REINSTALL_HOOK: u32 = 0x8001;
+
 static HOTKEY_SENDER: OnceLock<Sender<u32>> = OnceLock::new();
 static RECORDING_MODE: AtomicBool = AtomicBool::new(false);
 static RECORD_SENDER: OnceLock<Sender<u32>> = OnceLock::new();
@@ -64,6 +68,11 @@ impl HotkeyManager {
             unsafe {
                 let mut msg = MSG::default();
                 while GetMessageW(&mut msg, None, 0, 0).into() {
+                    if msg.message == WM_REINSTALL_HOOK {
+                        // Reinstall the hook to recover from silent removal by Windows
+                        install_hook();
+                        continue;
+                    }
                     let _ = TranslateMessage(&msg);
                     DispatchMessageW(&msg);
                 }
@@ -78,8 +87,24 @@ impl HotkeyManager {
         }
     }
 
-
-
+    /// Ask the hook thread to reinstall the keyboard hook.
+    /// Windows can silently remove WH_KEYBOARD_LL hooks when the hook
+    /// procedure doesn't respond within the system timeout (e.g., during
+    /// a tray context menu modal loop). Calling this periodically ensures
+    /// the hook stays active.
+    pub fn ensure_hook_active(&self) {
+        let tid = HOOK_THREAD_ID.load(Ordering::SeqCst);
+        if tid != 0 {
+            unsafe {
+                windows::Win32::UI::WindowsAndMessaging::PostThreadMessageW(
+                    tid,
+                    WM_REINSTALL_HOOK,
+                    WPARAM(0),
+                    LPARAM(0),
+                ).ok();
+            }
+        }
+    }
 
 
     pub fn try_recv(&self) -> Option<u32> {

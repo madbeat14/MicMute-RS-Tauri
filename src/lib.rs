@@ -440,12 +440,19 @@ pub fn run() {
                         }
                     }
 
-                    // ── Periodic cache refresh + overlay topmost ──
+                    // ── Periodic maintenance (~every 500ms) ──
                     topmost_counter += 1;
                     if topmost_counter >= topmost_ticks {
                         topmost_counter = 0;
 
-                        // Refresh cached config values (~every 500ms)
+                        // Reinstall keyboard hook if Windows silently removed it
+                        // (common during tray context menu modal loops)
+                        {
+                            let hk = state.hotkeys.lock().unwrap();
+                            hk.ensure_hook_active();
+                        }
+
+                        // Refresh cached config values
                         {
                             let st = state.config.lock().unwrap();
                             let new_cache = refresh_hotkey_cache(&st);
