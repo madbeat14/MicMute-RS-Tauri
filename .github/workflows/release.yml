@@ -17,6 +17,9 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --locked
+
       - name: Cache cargo
         uses: actions/cache@v4
         with:
@@ -26,13 +29,15 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Build release
-        run: cargo build --release
+      - name: Build Tauri release
+        run: cargo tauri build
 
       - name: Generate sha256
         shell: bash
         run: |
           sha256sum target/release/mic-mute-rs.exe > MicMuteRs.sha256
+          sha256sum target/release/bundle/msi/*.msi >> MicMuteRs.sha256
+          sha256sum target/release/bundle/nsis/*-setup.exe >> MicMuteRs.sha256
           cat MicMuteRs.sha256
 
       - name: Create Release
@@ -40,5 +45,7 @@ jobs:
         with:
           files: |
             target/release/mic-mute-rs.exe
+            target/release/bundle/msi/*.msi
+            target/release/bundle/nsis/*-setup.exe
             MicMuteRs.sha256
           generate_release_notes: true
