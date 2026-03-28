@@ -1,4 +1,4 @@
-#![allow(non_snake_case, non_upper_case_globals, unused_imports)]
+#![allow(non_snake_case, non_upper_case_globals)]
 use windows::core::{GUID, HRESULT, PCWSTR, interface};
 
 #[interface("f8679f50-850a-41cf-9c72-430f290290c8")]

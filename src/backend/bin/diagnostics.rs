@@ -20,8 +20,8 @@ fn main() -> Result<()> {
         let capture_collection = enumerator.EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)?;
         let count = capture_collection.GetCount()?;
         for i in 0..count {
-            if let Ok(device) = capture_collection.Item(i) {
-                if let Ok(id) = device.GetId() {
+            if let Ok(device) = capture_collection.Item(i)
+                && let Ok(id) = device.GetId() {
                     let id_str = id.to_string().unwrap_or_default();
                     let name = get_device_name(&device);
                     if let Ok(vol) = device.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None) {
@@ -29,15 +29,14 @@ fn main() -> Result<()> {
                         println!(" - [{}] '{}' MUTED: {}", id_str, name, is_muted);
                     }
                 }
-            }
         }
 
         println!("\n=== RENDER DEVICES ===");
         let render_collection = enumerator.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)?;
         let count = render_collection.GetCount()?;
         for i in 0..count {
-            if let Ok(device) = render_collection.Item(i) {
-                if let Ok(id) = device.GetId() {
+            if let Ok(device) = render_collection.Item(i)
+                && let Ok(id) = device.GetId() {
                     let id_str = id.to_string().unwrap_or_default();
                     let name = get_device_name(&device);
                     if let Ok(vol) = device.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None) {
@@ -45,7 +44,6 @@ fn main() -> Result<()> {
                         println!(" - [{}] '{}' MUTED: {}", id_str, name, is_muted);
                     }
                 }
-            }
         }
     }
     Ok(())
@@ -54,8 +52,8 @@ fn main() -> Result<()> {
 fn get_device_name(device: &windows::Win32::Media::Audio::IMMDevice) -> String {
     unsafe {
         let mut name = "Unknown".to_string();
-        if let Ok(store) = device.OpenPropertyStore(STGM_READ) {
-            if let Ok(prop_var) = store.GetValue(&PKEY_Device_FriendlyName) {
+        if let Ok(store) = device.OpenPropertyStore(STGM_READ)
+            && let Ok(prop_var) = store.GetValue(&PKEY_Device_FriendlyName) {
                 let ptr = &prop_var as *const _ as *const u16;
                 let vt = *ptr;
                 if vt == 31 {
@@ -71,7 +69,6 @@ fn get_device_name(device: &windows::Win32::Media::Audio::IMMDevice) -> String {
                     }
                 }
             }
-        }
         name
     }
 }

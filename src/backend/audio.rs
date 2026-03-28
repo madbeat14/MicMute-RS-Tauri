@@ -5,7 +5,7 @@
 //! via COM interfaces.
 //!
 //! # Example
-//! ```no_run
+//! ```ignore
 //! let controller = AudioController::new(None)?;
 //! let is_muted = controller.is_muted()?;
 //! controller.set_mute(true, &config)?;
@@ -27,16 +27,12 @@ impl<T> Drop for CoTaskMemGuard<T> {
     fn drop(&mut self) {
         if !self.0.is_null() {
             unsafe {
-                windows::Win32::System::Com::CoTaskMemFree(Some(
-                    self.0 as *const std::ffi::c_void,
-                ));
+                windows::Win32::System::Com::CoTaskMemFree(Some(self.0 as *const std::ffi::c_void));
             }
         }
     }
 }
 
-/// PROPVARIANT VT_LPWSTR type tag
-const VT_LPWSTR: u16 = 31;
 use windows::Win32::Media::Audio::Endpoints::{IAudioEndpointVolume, IAudioMeterInformation};
 use windows::Win32::Media::Audio::{
     AUDCLNT_SHAREMODE_SHARED, IAudioClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
@@ -96,15 +92,22 @@ impl AudioController {
             let meter: IAudioMeterInformation = device.Activate(CLSCTX_ALL, None)?;
 
             let mut audio_client = None;
-            if let Ok(client) = device.Activate::<IAudioClient>(CLSCTX_ALL, None) {
-                if let Ok(fmt) = client.GetMixFormat() {
+            if let Ok(client) = device.Activate::<IAudioClient>(CLSCTX_ALL, None)
+                && let Ok(fmt) = client.GetMixFormat() {
                     // SAFETY: `fmt` was allocated by COM via GetMixFormat.
                     // Guard ensures it is freed on scope exit regardless of control flow.
                     let _fmt_guard = CoTaskMemGuard(fmt);
 
                     // Initialize and Start the client so the hardware starts feeding meter data
                     if client
-                        .Initialize(AUDCLNT_SHAREMODE_SHARED, 0, AUDIO_CLIENT_BUFFER_DURATION_100NS, 0, fmt, None)
+                        .Initialize(
+                            AUDCLNT_SHAREMODE_SHARED,
+                            0,
+                            AUDIO_CLIENT_BUFFER_DURATION_100NS,
+                            0,
+                            fmt,
+                            None,
+                        )
                         .is_ok()
                     {
                         if client.Start().is_ok() {
@@ -114,7 +117,6 @@ impl AudioController {
                         tracing::error!("Failed to initialize AudioClient");
                     }
                 }
-            }
 
             Ok(Self {
                 _device: device,
@@ -152,19 +154,34 @@ impl AudioController {
     fn sync_mute_to_devices(&self, mute: bool, config: &AppConfig) {
         unsafe {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-            let Ok(enumerator) = CoCreateInstance::<_, IMMDeviceEnumerator>(
-                &MMDeviceEnumerator, None, CLSCTX_ALL,
-            ) else { return };
+            let Ok(enumerator) =
+                CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL)
+            else {
+                return;
+            };
             let Ok(collection) = enumerator.EnumAudioEndpoints(
                 windows::Win32::Media::Audio::eCapture,
                 windows::Win32::Media::Audio::DEVICE_STATE_ACTIVE,
-            ) else { return };
-            let Ok(count) = collection.GetCount() else { return };
+            ) else {
+                return;
+            };
+            let Ok(count) = collection.GetCount() else {
+                return;
+            };
 
             for i in 0..count {
-                let Ok(dev) = collection.Item(i) else { continue };
+                let Ok(dev) = collection.Item(i) else {
+                    continue;
+                };
                 let Ok(id_pwstr) = dev.GetId() else { continue };
-                let id_string = id_pwstr.to_string().unwrap_or_default();
+                let _id_guard = CoTaskMemGuard(id_pwstr.0);
+                let id_string = match id_pwstr.to_string() {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::error!(error = ?e, "Failed to convert device ID to string");
+                        continue;
+                    }
+                };
 
                 if config.device_id.as_ref() == Some(&id_string) {
                     continue;
@@ -213,10 +230,21 @@ impl AudioController {
     }
 }
 
+/// Reject paths containing `..` components to prevent path traversal.
+fn is_safe_sound_path(path: &str) -> bool {
+    !std::path::Path::new(path)
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+}
+
 /// Play audio feedback and return the Sink so the caller can keep it alive.
 /// When the returned Sink is dropped, playback stops immediately — this lets
 /// the worker thread cancel a previous sound by simply replacing it.
-pub fn play_feedback(stream_handle: &OutputStreamHandle, is_muted: bool, config: &AppConfig) -> Option<Sink> {
+pub fn play_feedback(
+    stream_handle: &OutputStreamHandle,
+    is_muted: bool,
+    config: &AppConfig,
+) -> Option<Sink> {
     if !config.beep_enabled {
         return None;
     }
@@ -224,8 +252,8 @@ pub fn play_feedback(stream_handle: &OutputStreamHandle, is_muted: bool, config:
     let key = if is_muted { "mute" } else { "unmute" };
 
     if config.audio_mode == "beep" {
-        if let Some(beep_cfg) = config.beep_mode_configs.get(key) {
-            if let Ok(sink) = Sink::try_new(stream_handle) {
+        if let Some(beep_cfg) = config.beep_mode_configs.get(key)
+            && let Ok(sink) = Sink::try_new(stream_handle) {
                 for _ in 0..beep_cfg.count {
                     let source = SineWave::new(beep_cfg.freq as f32)
                         .take_duration(Duration::from_millis(beep_cfg.duration as u64))
@@ -234,26 +262,33 @@ pub fn play_feedback(stream_handle: &OutputStreamHandle, is_muted: bool, config:
                 }
                 return Some(sink);
             }
-        }
     } else {
         // "custom" mode
         if let Some(sound_cfg) = config.sound_mode_configs.get(key) {
             let mut path_found = None;
             let sound_cfg_file = &sound_cfg.file;
 
+            if !is_safe_sound_path(sound_cfg_file) {
+                tracing::error!(file = %sound_cfg_file, "Sound path rejected: contains path traversal");
+                return None;
+            }
+
             let p = std::path::PathBuf::from(sound_cfg_file);
             if p.is_absolute() && p.exists() {
                 path_found = Some(p);
             } else {
                 // Check local assets (Priority for Rust version)
-                if let Ok(exe_path) = std::env::current_exe() {
-                    if let Some(parent) = exe_path.parent() {
-                        let local_assets = parent.join("src").join("frontend").join("assets").join(sound_cfg_file);
+                if let Ok(exe_path) = std::env::current_exe()
+                    && let Some(parent) = exe_path.parent() {
+                        let local_assets = parent
+                            .join("src")
+                            .join("frontend")
+                            .join("assets")
+                            .join(sound_cfg_file);
                         if local_assets.exists() {
                             path_found = Some(local_assets);
                         }
                     }
-                }
                 if path_found.is_none() {
                     let cwd_assets = std::env::current_dir()
                         .unwrap_or_default()
@@ -311,15 +346,14 @@ pub fn play_feedback(stream_handle: &OutputStreamHandle, is_muted: bool, config:
                         sink.append(source);
                         return Some(sink);
                     }
-                } else if let Some(beep_cfg) = config.beep_mode_configs.get(key) {
-                    if let Ok(sink) = Sink::try_new(stream_handle) {
+                } else if let Some(beep_cfg) = config.beep_mode_configs.get(key)
+                    && let Ok(sink) = Sink::try_new(stream_handle) {
                         let source = SineWave::new(beep_cfg.freq as f32)
                             .take_duration(Duration::from_millis(beep_cfg.duration as u64))
                             .amplify(0.2);
                         sink.append(source);
                         return Some(sink);
                     }
-                }
             }
         }
     }
@@ -338,34 +372,34 @@ pub fn get_audio_devices() -> Result<Vec<(String, String)>> {
         let mut devices = Vec::new();
 
         for i in 0..count {
-            if let Ok(device) = collection.Item(i) {
-                if let Ok(id_pwstr) = device.GetId() {
-                    let id_string = id_pwstr.to_string().unwrap_or_default();
+            if let Ok(device) = collection.Item(i)
+                && let Ok(id_pwstr) = device.GetId() {
+                    let _id_guard = CoTaskMemGuard(id_pwstr.0);
+                    let id_string = match id_pwstr.to_string() {
+                        Ok(s) => s,
+                        Err(e) => {
+                            tracing::error!(error = ?e, "Failed to convert device ID to string");
+                            continue;
+                        }
+                    };
                     let mut name = "Unknown Device".to_string();
 
-                    if let Ok(store) = device.OpenPropertyStore(STGM_READ) {
-                        if let Ok(prop_var) = store.GetValue(&PKEY_Device_FriendlyName) {
-                            let ptr = &prop_var as *const _ as *const u16;
-                            let vt = *ptr;
-                            if vt == VT_LPWSTR {
-                                let wstr_ptr_addr = ptr.add(4) as *const *const u16;
-                                let wstr_ptr = *wstr_ptr_addr;
-                                if !wstr_ptr.is_null() {
-                                    let mut len = 0;
-                                    while *wstr_ptr.add(len) != 0 {
-                                        len += 1;
-                                    }
-                                    let slice = std::slice::from_raw_parts(wstr_ptr, len);
-                                    name = String::from_utf16_lossy(slice);
+                    if let Ok(store) = device.OpenPropertyStore(STGM_READ)
+                        && let Ok(prop_var) = store.GetValue(&PKEY_Device_FriendlyName) {
+                            let name_str = {
+                                let ptr = &prop_var as *const _ as *const u64;
+                                let pwstr_ptr = *(ptr.add(1) as *const *const u16);
+                                if !pwstr_ptr.is_null() {
+                                    let name_pwstr = windows::core::PWSTR(pwstr_ptr as *mut _);
+                                    name_pwstr.to_string().unwrap_or_else(|_| id_string.clone())
+                                } else {
+                                    id_string.clone()
                                 }
-                            } else {
-                                name = id_string.clone();
-                            }
+                            };
+                            name = name_str;
                         }
-                    }
                     devices.push((id_string, name));
                 }
-            }
         }
         Ok(devices)
     }

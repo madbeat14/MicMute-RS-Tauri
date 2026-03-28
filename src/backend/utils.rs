@@ -1,8 +1,8 @@
 //! Utility functions: idle detection, VK code mapping, window helpers.
 
 use windows::Win32::Foundation::HWND;
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 use windows::Win32::System::SystemInformation::GetTickCount;
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 
 pub fn get_idle_duration() -> f32 {
     unsafe {
@@ -83,8 +83,12 @@ pub fn force_topmost(hwnd: HWND) {
         SetWindowPos(
             hwnd,
             HWND_TOPMOST,
-            0, 0, 0, 0,
+            0,
+            0,
+            0,
+            0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-        ).ok();
+        )
+        .ok();
     }
 }

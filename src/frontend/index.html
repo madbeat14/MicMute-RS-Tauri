@@ -19,7 +19,7 @@
         <span class="vu-bar-container"><span class="vu-bar" id="vu-bar"></span></span>
       </div>
     </div>
-    <button class="btn-icon" id="btn-toggle-mute" title="Toggle Mute">🎤</button>
+    <button class="btn-icon" id="btn-toggle-mute" title="Toggle Mute" aria-label="Toggle microphone mute" aria-pressed="false">🎤</button>
   </header>
 
   <!-- Tab Navigation — outside scroll area so it's always visible -->
@@ -184,22 +184,22 @@
             </label>
             <label class="field-label mt-8">Position</label>
             <select id="sel-overlay-pos" class="select-input">
-              <option>Custom</option>
-              <option>Top-Left</option>
-              <option>Top-Center</option>
-              <option>Top-Right</option>
-              <option>Center-Left</option>
-              <option>Center</option>
-              <option>Center-Right</option>
-              <option>Bottom-Left</option>
-              <option>Bottom-Center</option>
-              <option>Bottom-Right</option>
+              <option value="Custom">Custom</option>
+              <option value="Top-Left">Top-Left</option>
+              <option value="Top-Center">Top-Center</option>
+              <option value="Top-Right">Top-Right</option>
+              <option value="Center-Left">Center-Left</option>
+              <option value="Center">Center</option>
+              <option value="Center-Right">Center-Right</option>
+              <option value="Bottom-Left">Bottom-Left</option>
+              <option value="Bottom-Center">Bottom-Center</option>
+              <option value="Bottom-Right">Bottom-Right</option>
             </select>
             <label class="field-label mt-8">Icon Theme</label>
             <select id="sel-overlay-theme" class="select-input">
-              <option>Auto</option>
-              <option>Dark</option>
-              <option>Light</option>
+              <option value="Auto">Auto</option>
+              <option value="Dark">Dark</option>
+              <option value="Light">Light</option>
             </select>
             <label class="field-label mt-8">Size: <span id="overlay-scale-val">48</span>px</label>
             <input type="range" id="slider-overlay-scale" min="16" max="256" class="slider" />
@@ -232,9 +232,9 @@
             <input type="range" id="slider-osd-opacity" min="10" max="100" class="slider" />
             <label class="field-label mt-8">Position</label>
             <select id="sel-osd-pos" class="select-input">
-              <option>Top</option>
-              <option>Center</option>
-              <option>Bottom</option>
+              <option value="Top">Top</option>
+              <option value="Center">Center</option>
+              <option value="Bottom">Bottom</option>
             </select>
           </div>
         </div>
@@ -276,6 +276,9 @@
   </footer>
 
   <!-- Import application logic -->
+  <script src="js/ui-helpers.js"></script>
+  <script src="js/audio-ui.js"></script>
+  <script src="js/hotkey-ui.js"></script>
   <script src="js/main.js"></script>
 </body>
 

@@ -1,10 +1,18 @@
 use std::env;
 use std::fs;
 use std::os::windows::process::CommandExt;
-use std::path::PathBuf;
 use std::process::Command;
 
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+/// Escape special characters for safe XML interpolation.
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
 
 const TASK_XML_TEMPLATE: &str = r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -51,7 +59,7 @@ const TASK_XML_TEMPLATE: &str = r#"<?xml version="1.0" encoding="UTF-16"?>
 
 pub fn get_run_on_startup() -> bool {
     let output = Command::new("schtasks")
-        .args(&["/Query", "/TN", "MicMuteStartup"])
+        .args(["/Query", "/TN", "MicMuteStartup"])
         .creation_flags(CREATE_NO_WINDOW)
         .output();
 
@@ -71,15 +79,21 @@ pub fn set_run_on_startup(enable: bool) {
 }
 
 fn create_startup_task() {
-    let exe_path = env::current_exe().unwrap_or_else(|_| PathBuf::from("MicMuteRs.exe"));
+    let exe_path = match env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to get current exe path for startup task");
+            return;
+        }
+    };
     let exe_str = exe_path.to_string_lossy();
 
     let author = env::var("USERNAME").unwrap_or_else(|_| "Author".to_string());
 
     let xml_content = TASK_XML_TEMPLATE
-        .replace("{AUTHOR}", &author)
-        .replace("{EXE_PATH}", &exe_str)
-        .replace("{ARGUMENTS}", ""); // Empty args for now as exe_path itself is the target
+        .replace("{AUTHOR}", &xml_escape(&author))
+        .replace("{EXE_PATH}", &xml_escape(&exe_str))
+        .replace("{ARGUMENTS}", "");
 
     let temp_dir = env::temp_dir();
     let temp_xml_path = temp_dir.join("micmute_startup.xml");
@@ -96,7 +110,7 @@ fn create_startup_task() {
     let path_str = temp_xml_path.to_string_lossy();
 
     let output = Command::new("schtasks")
-        .args(&["/Create", "/TN", "MicMuteStartup", "/XML", &path_str, "/F"])
+        .args(["/Create", "/TN", "MicMuteStartup", "/XML", &path_str, "/F"])
         .creation_flags(CREATE_NO_WINDOW)
         .output();
 
@@ -112,15 +126,18 @@ fn create_startup_task() {
 }
 
 fn create_task_elevated(xml_path: &str) {
-    let schtasks_args = format!("/Create /TN \"MicMuteStartup\" /XML \"{}\" /F", xml_path);
+    // Escape single quotes for PowerShell string interpolation
+    let safe_path = xml_path.replace('\'', "''");
+    let schtasks_args = format!("/Create /TN \"MicMuteStartup\" /XML \"{}\" /F", safe_path);
+    let safe_args = schtasks_args.replace('\'', "''");
     let _ = Command::new("powershell")
-        .args(&[
+        .args([
             "-WindowStyle",
             "Hidden",
             "-Command",
             &format!(
                 "Start-Process schtasks -ArgumentList '{}' -WindowStyle Hidden -Verb RunAs -Wait",
-                schtasks_args
+                safe_args
             ),
         ])
         .creation_flags(CREATE_NO_WINDOW)
@@ -129,7 +146,7 @@ fn create_task_elevated(xml_path: &str) {
 
 fn delete_startup_task() {
     let output = Command::new("schtasks")
-        .args(&["/Delete", "/TN", "MicMuteStartup", "/F"])
+        .args(["/Delete", "/TN", "MicMuteStartup", "/F"])
         .creation_flags(CREATE_NO_WINDOW)
         .output();
 
@@ -143,9 +160,9 @@ fn delete_startup_task() {
 }
 
 fn delete_task_elevated() {
-    let schtasks_args = "/Delete /TN \"MicMuteStartup\" /F";
+    let schtasks_args = "/Delete /TN ''MicMuteStartup'' /F";
     let _ = Command::new("powershell")
-        .args(&[
+        .args([
             "-WindowStyle",
             "Hidden",
             "-Command",

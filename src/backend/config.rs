@@ -216,14 +216,14 @@ impl AppConfig {
 
     /// Clamp and sanitize config values to valid ranges.
     fn validate(&mut self) {
-        self.afk.timeout = self.afk.timeout.clamp(
-            constants::MIN_AFK_TIMEOUT_S,
-            constants::MAX_AFK_TIMEOUT_S,
-        );
-        self.persistent_overlay.scale = self.persistent_overlay.scale.clamp(
-            10,
-            constants::MAX_OVERLAY_SCALE,
-        );
+        self.afk.timeout = self
+            .afk
+            .timeout
+            .clamp(constants::MIN_AFK_TIMEOUT_S, constants::MAX_AFK_TIMEOUT_S);
+        self.persistent_overlay.scale = self
+            .persistent_overlay
+            .scale
+            .clamp(10, constants::MAX_OVERLAY_SCALE);
         if self.osd.duration == 0 {
             self.osd.duration = constants::DEFAULT_OSD_DURATION_MS;
         }
@@ -239,47 +239,58 @@ impl AppConfig {
     }
 
     pub fn load() -> Self {
-        if let Some(path) = Self::get_config_path() {
-            if path.exists() {
-                if let Ok(content) = fs::read_to_string(&path) {
-                    if let Ok(mut config) = serde_json::from_str::<Self>(&content) {
+        if let Some(path) = Self::get_config_path()
+            && path.exists()
+                && let Ok(content) = fs::read_to_string(&path)
+                    && let Ok(mut config) = serde_json::from_str::<Self>(&content) {
                         // Migrate legacy Python config formats
                         let mut needs_save = false;
-                        if let Some(mode_val) = config.hotkey.remove("mode") {
-                            if let Some(mode_str) = mode_val.as_str() {
+                        if let Some(mode_val) = config.hotkey.remove("mode")
+                            && let Some(mode_str) = mode_val.as_str() {
                                 config.hotkey_mode = mode_str.to_string();
                                 needs_save = true;
                             }
-                        }
 
                         config.validate();
 
                         if needs_save {
-                            config.save();
+                            let _ = config.save();
                         }
 
                         return config;
                     }
-                }
-            }
-        }
         Self::default()
     }
 
-    pub fn save(&self) {
-        let Some(path) = Self::get_config_path() else {
-            tracing::error!("Could not determine config path");
-            return;
-        };
-        match serde_json::to_string_pretty(self) {
-            Ok(json) => {
-                if let Err(e) = fs::write(&path, json) {
-                    tracing::error!(path = %path.display(), error = %e, "Failed to write config");
-                }
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "Config serialization failed");
-            }
-        }
+    pub fn save(&self) -> Result<(), String> {
+        let path =
+            Self::get_config_path().ok_or_else(|| "Could not determine config path".to_string())?;
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| format!("Config serialization failed: {}", e))?;
+        fs::write(&path, json).map_err(|e| {
+            let msg = format!("Failed to write config to {}: {}", path.display(), e);
+            tracing::error!("{}", msg);
+            msg
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_default() {
+        let cfg = AppConfig::default();
+        assert_eq!(cfg.hotkey_mode, "toggle");
+        assert!(cfg.beep_enabled);
+    }
+
+    #[test]
+    fn test_config_validation() {
+        let mut cfg = AppConfig::default();
+        cfg.osd.duration = 0;
+        cfg.validate();
+        assert_eq!(cfg.osd.duration, 1500);
     }
 }

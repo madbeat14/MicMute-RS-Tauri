@@ -6,9 +6,9 @@ use std::thread;
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, GetMessageW, TranslateMessage,
-    HHOOK, KBDLLHOOKSTRUCT, MSG, SetWindowsHookExW, UnhookWindowsHookEx,
-    WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    CallNextHookEx, DispatchMessageW, GetMessageW, HHOOK, KBDLLHOOKSTRUCT, MSG, SetWindowsHookExW,
+    TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN,
+    WM_SYSKEYUP,
 };
 
 // ── Custom thread messages (WM_APP range 0x8000..0xBFFF) ──
@@ -43,8 +43,12 @@ impl HotkeyManager {
         let (sender, receiver) = channel();
         let (rec_sender, record_receiver) = channel();
 
-        let _ = HOTKEY_SENDER.set(sender);
-        let _ = RECORD_SENDER.set(rec_sender);
+        HOTKEY_SENDER
+            .set(sender)
+            .expect("HotkeyManager::new must only be called once");
+        RECORD_SENDER
+            .set(rec_sender)
+            .expect("HotkeyManager::new must only be called once");
 
         for (i, &vk) in vks.iter().take(3).enumerate() {
             TARGET_VKS[i].store(vk, Ordering::SeqCst);
@@ -94,18 +98,17 @@ impl HotkeyManager {
                         WM_HOTKEY => {
                             // RegisterHotKey backup fired — the LL hook didn't catch this key.
                             // Deduplicate: if the LL hook already sent this VK within 100ms, skip.
-                            let id = msg.wParam.0 as usize;
-                            if id >= 1 && id <= 3 {
+                            let id = msg.wParam.0;
+                            if (1..=3).contains(&id) {
                                 let vk = TARGET_VKS[id - 1].load(Ordering::SeqCst);
                                 if vk != 0 && !RECORDING_MODE.load(Ordering::SeqCst) {
                                     let now =
                                         windows::Win32::System::SystemInformation::GetTickCount();
                                     let last = LAST_LL_SEND_TICK.load(Ordering::SeqCst);
-                                    if now.saturating_sub(last) > 100 {
-                                        if let Some(sender) = HOTKEY_SENDER.get() {
+                                    if now.saturating_sub(last) > 100
+                                        && let Some(sender) = HOTKEY_SENDER.get() {
                                             let _ = sender.send(vk);
                                         }
-                                    }
                                 }
                             }
                         }
@@ -129,8 +132,12 @@ impl HotkeyManager {
         if tid != 0 {
             unsafe {
                 windows::Win32::UI::WindowsAndMessaging::PostThreadMessageW(
-                    tid, WM_SYNC_HOTKEYS, WPARAM(0), LPARAM(0),
-                ).ok();
+                    tid,
+                    WM_SYNC_HOTKEYS,
+                    WPARAM(0),
+                    LPARAM(0),
+                )
+                .ok();
             }
         }
     }
@@ -141,8 +148,12 @@ impl HotkeyManager {
         if tid != 0 {
             unsafe {
                 windows::Win32::UI::WindowsAndMessaging::PostThreadMessageW(
-                    tid, WM_REINSTALL_HOOK, WPARAM(0), LPARAM(0),
-                ).ok();
+                    tid,
+                    WM_REINSTALL_HOOK,
+                    WPARAM(0),
+                    LPARAM(0),
+                )
+                .ok();
             }
         }
     }
@@ -192,6 +203,8 @@ unsafe extern "system" fn hook_callback(n_code: i32, w_param: WPARAM, l_param: L
         let is_up = w_param_u32 == WM_KEYUP || w_param_u32 == WM_SYSKEYUP;
 
         if is_down || is_up {
+            // SAFETY: When n_code >= 0 and the message is WM_KEYDOWN/WM_KEYUP/WM_SYSKEYDOWN/WM_SYSKEYUP,
+            // Windows guarantees l_param points to a valid KBDLLHOOKSTRUCT for the duration of the callback.
             let kbd_struct = unsafe { *(l_param.0 as *const KBDLLHOOKSTRUCT) };
 
             if RECORDING_MODE.load(Ordering::SeqCst) {
@@ -207,8 +220,8 @@ unsafe extern "system" fn hook_callback(n_code: i32, w_param: WPARAM, l_param: L
                 for target_atomic in &TARGET_VKS {
                     let target = target_atomic.load(Ordering::SeqCst);
                     if target != 0 && kbd_struct.vkCode == target {
-                        if is_down {
-                            if let Some(sender) = HOTKEY_SENDER.get() {
+                        if is_down
+                            && let Some(sender) = HOTKEY_SENDER.get() {
                                 let _ = sender.send(kbd_struct.vkCode);
                                 // Record tick for dedup with RegisterHotKey backup
                                 let tick = unsafe {
@@ -216,7 +229,6 @@ unsafe extern "system" fn hook_callback(n_code: i32, w_param: WPARAM, l_param: L
                                 };
                                 LAST_LL_SEND_TICK.store(tick, Ordering::SeqCst);
                             }
-                        }
                         return windows::Win32::Foundation::LRESULT(1);
                     }
                 }
@@ -250,7 +262,7 @@ fn sync_registered_hotkeys() {
                     vk,
                 );
                 if let Err(e) = result {
-                    tracing::warn!(vk = vk, error = ?e, "RegisterHotKey failed (key may be reserved by another app)");
+                    tracing::debug!(vk = vk, error = ?e, "RegisterHotKey failed (key may be reserved by another app)");
                 }
             }
         }

@@ -1,0 +1,11 @@
+/* OSD page-specific styles (moved from inline <style> in osd.html) */
+body {
+    margin: 0;
+    overflow: hidden;
+    background: transparent;
+}
+
+.osd-card {
+    width: 90vw;
+    height: 90vh;
+}

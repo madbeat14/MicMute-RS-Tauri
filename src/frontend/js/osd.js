@@ -14,6 +14,8 @@ async function init() {
     });
 }
 
+let hideTimer = null;
+
 /**
  * Displays the OSD card with the appropriate icon and automatically hides it after a duration.
  * @param {boolean} isMuted - Whether the microphone is currently muted.
@@ -21,6 +23,7 @@ async function init() {
  * @param {number} opacity - The opacity percentage (0-100) for the OSD card.
  */
 function showOsd(isMuted, duration, opacity) {
+    if (hideTimer) clearTimeout(hideTimer);
     const card = document.getElementById("osd-card");
     const icon = document.getElementById("osd-icon");
     if (!icon || !card) return;
@@ -40,8 +43,9 @@ function showOsd(isMuted, duration, opacity) {
     card.style.opacity = (opacity ?? 80) / 100;
 
     // Fade out ~300ms before end
-    setTimeout(() => {
+    hideTimer = setTimeout(() => {
         card.classList.add("hiding");
+        hideTimer = null;
     }, Math.max(0, duration - 300));
 }
 

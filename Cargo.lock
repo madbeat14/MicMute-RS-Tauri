@@ -1971,10 +1971,11 @@ dependencies = [
 
 [[package]]
 name = "mic-mute-rs"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "directories",
  "open",
+ "parking_lot",
  "rodio",
  "serde",
  "serde_json",

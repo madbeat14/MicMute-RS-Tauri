@@ -3,10 +3,10 @@
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Gdi::{
     BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetPixel,
-    ReleaseDC, SelectObject, SRCCOPY,
+    ReleaseDC, SRCCOPY, SelectObject,
 };
 use windows::Win32::System::Registry::{
-    RegOpenKeyExW, RegQueryValueExW, HKEY_CURRENT_USER, KEY_READ,
+    HKEY_CURRENT_USER, KEY_READ, RegOpenKeyExW, RegQueryValueExW,
 };
 use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
 
@@ -61,8 +61,8 @@ pub fn is_system_light_theme() -> bool {
 /// brightness is near the boundary. White icons are the default; dark icons only
 /// appear on very bright backgrounds.
 pub fn is_background_light(hwnd: HWND) -> bool {
-    use std::sync::atomic::{AtomicBool, Ordering};
     use crate::constants::{OVERLAY_BRIGHT_THRESHOLD, OVERLAY_DIM_THRESHOLD};
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     static LAST_IS_LIGHT: AtomicBool = AtomicBool::new(false);
 

@@ -12,6 +12,9 @@ let vuPollTimer = null; // Timer reference for polling the Volume Unit (VU) mete
 let isDragging = false; // Track if the window is being dragged
 let dragTimeout = null; // Timeout to detect when dragging ends
 
+let unlistenState = null;
+let unlistenConfig = null;
+
 /**
  * Initializes the overlay by fetching the initial configuration and state,
  * subscribing to state updates, and starting the VU meter polling if enabled.
@@ -29,13 +32,15 @@ async function init() {
         console.error("overlay init:", e);
     }
 
-    await listen("state-update", e => {
+    if (unlistenState) unlistenState();
+    unlistenState = await listen("state-update", e => {
         isMuted = e.payload.is_muted;
         updateIcon();
     });
 
     // Listen for config updates from the main window
-    await listen("config-update", e => {
+    if (unlistenConfig) unlistenConfig();
+    unlistenConfig = await listen("config-update", e => {
         config = e.payload.config;
         updateDragRegion();
         updateIcon();
@@ -97,10 +102,19 @@ function setupDragDetection() {
         }, 500); // Wait 500ms after last mouse event to consider drag ended
     };
 
-    // Listen for mouse events on the document
+    // Throttle mousemove to avoid excessive timer resets
+    let lastMoveTime = 0;
+    const throttledMove = () => {
+        const now = Date.now();
+        if (now - lastMoveTime >= 50) {
+            lastMoveTime = now;
+            resetDragTimeout();
+        }
+    };
+
     document.addEventListener("mousedown", resetDragTimeout);
     document.addEventListener("mouseup", resetDragTimeout);
-    document.addEventListener("mousemove", resetDragTimeout);
+    document.addEventListener("mousemove", throttledMove);
 }
 
 /**
@@ -116,7 +130,7 @@ async function saveCurrentPosition() {
         
         // Save to config
         await invoke("save_overlay_position", { x: position.x, y: position.y });
-        console.log("Saved overlay position:", position.x, position.y);
+        // Position saved successfully
     } catch (e) {
         console.error("Failed to save overlay position:", e);
     }

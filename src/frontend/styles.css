@@ -1,7 +1,7 @@
 /* ════════════════════════════════
    MicMuteRs – Global Design System
    ════════════════════════════════ */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+/* System font stack — Google Fonts removed (blocked by CSP) */
 
 /* ── GLOBAL THEME VARIABLES ──────────────────── */
 /* These variables control the color palette, fonts, spacing, shadows, and transitions */
@@ -52,7 +52,7 @@
 /* Global document defaults */
 html,
 body {
-  font-family: 'Inter', system-ui, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
   font-size: 14px;
   background: transparent;
   color: var(--text-1);
@@ -647,7 +647,7 @@ body.overlay-page {
   background: rgba(255, 255, 255, 0.1);
   border: 1px solid rgba(255, 255, 255, 0.15);
   margin-left: 10px;
-  transition: all .15s ease;
+  transition: opacity .15s ease, transform .15s ease;
   pointer-events: none;
   flex-shrink: 0;
 }
@@ -702,6 +702,9 @@ body.overlay-page {
 /* The actual OSD microphone icon SVG */
 .osd-icon {
   width: 60%;
+  height: 60%;
+  object-fit: contain;
+} 60%;
   height: 60%;
   object-fit: contain;
 }

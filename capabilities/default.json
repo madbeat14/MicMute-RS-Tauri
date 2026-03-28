@@ -2,8 +2,6 @@
     "identifier": "default",
     "description": "Default capabilities",
     "platforms": [
-        "linux",
-        "macOS",
         "windows"
     ],
     "windows": [
