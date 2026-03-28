@@ -56,11 +56,41 @@ pub fn is_system_light_theme() -> bool {
 /// Captures the screen area behind the given window and determines if it's light or dark.
 /// Returns true if the background is light, false if dark.
 /// Used for auto theme detection on the overlay icon.
+///
+/// Uses hysteresis (two thresholds) to prevent rapid toggling when the background
+/// brightness is near the boundary. White icons are the default; dark icons only
+/// appear on very bright backgrounds.
 pub fn is_background_light(hwnd: HWND) -> bool {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use crate::constants::{OVERLAY_BRIGHT_THRESHOLD, OVERLAY_DIM_THRESHOLD};
+
+    static LAST_IS_LIGHT: AtomicBool = AtomicBool::new(false);
+
+    let avg_brightness = match sample_background_brightness(hwnd) {
+        Some(b) => b,
+        None => return is_system_light_theme(),
+    };
+
+    let was_light = LAST_IS_LIGHT.load(Ordering::Relaxed);
+    let is_light = if was_light {
+        // Currently dark icons — stay that way unless brightness drops enough
+        avg_brightness > OVERLAY_DIM_THRESHOLD
+    } else {
+        // Currently white icons (default) — only switch when really bright
+        avg_brightness > OVERLAY_BRIGHT_THRESHOLD
+    };
+
+    LAST_IS_LIGHT.store(is_light, Ordering::Relaxed);
+    is_light
+}
+
+/// Samples the screen behind `hwnd` and returns average perceived brightness (0–255).
+/// Returns `None` if the capture fails.
+fn sample_background_brightness(hwnd: HWND) -> Option<u64> {
     unsafe {
         let mut rect = RECT::default();
         if GetWindowRect(hwnd, &mut rect).is_err() {
-            return is_system_light_theme();
+            return None;
         }
 
         let x = rect.left;
@@ -70,20 +100,20 @@ pub fn is_background_light(hwnd: HWND) -> bool {
 
         let desktop_dc = GetDC(None);
         if desktop_dc.is_invalid() {
-            return is_system_light_theme();
+            return None;
         }
 
         let mem_dc = CreateCompatibleDC(desktop_dc);
         if mem_dc.is_invalid() {
             let _ = ReleaseDC(None, desktop_dc);
-            return is_system_light_theme();
+            return None;
         }
 
         let bitmap = CreateCompatibleBitmap(desktop_dc, width, height);
         if bitmap.is_invalid() {
             let _ = DeleteDC(mem_dc);
             let _ = ReleaseDC(None, desktop_dc);
-            return is_system_light_theme();
+            return None;
         }
 
         let old_bitmap = SelectObject(mem_dc, bitmap);
@@ -116,10 +146,9 @@ pub fn is_background_light(hwnd: HWND) -> bool {
         let _ = ReleaseDC(None, desktop_dc);
 
         if sample_count == 0 {
-            return is_system_light_theme();
+            return None;
         }
 
-        let avg_brightness = total_brightness / sample_count;
-        avg_brightness > 150
+        Some(total_brightness / sample_count)
     }
 }

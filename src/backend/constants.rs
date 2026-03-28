@@ -52,3 +52,13 @@ pub const DEFAULT_OSD_SIZE: u32 = 150;
 
 /// Interval in milliseconds for re-asserting overlay always-on-top z-order
 pub const OVERLAY_TOPMOST_INTERVAL_MS: u64 = 500;
+
+/// Overlay auto-theme brightness threshold to switch TO dark icons (background is "light").
+/// Only trigger when background is very bright (white icons are the default).
+/// Range 0–255; 210 ≈ 82% brightness.
+pub const OVERLAY_BRIGHT_THRESHOLD: u64 = 210;
+
+/// Overlay auto-theme brightness threshold to switch BACK to white icons (background is "dark").
+/// Must be lower than OVERLAY_BRIGHT_THRESHOLD to create a hysteresis dead zone
+/// that prevents rapid toggling. Range 0–255; 170 ≈ 67% brightness.
+pub const OVERLAY_DIM_THRESHOLD: u64 = 170;
