@@ -167,6 +167,11 @@ body {
   box-shadow: 0 0 12px var(--accent-glow);
 }
 
+.btn-mute-img {
+  width: 22px;
+  height: 22px;
+}
+
 /* Main scrollable area */
 .settings-content {
   flex: 1;

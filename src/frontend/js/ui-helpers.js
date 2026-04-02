@@ -142,9 +142,13 @@ function updateVU(peak) {
 function updateMuteUI(muted) {
     const badge = document.getElementById("mute-status");
     const btn = document.getElementById("btn-toggle-mute");
+    const icon = document.getElementById("btn-mute-icon");
     badge.textContent = muted ? "Muted" : "Active";
     badge.className = "status-badge " + (muted ? "muted" : "active");
-    btn.textContent = muted ? "Mute" : "Mic";
+    if (icon) {
+        icon.src = muted ? "assets/mic_muted_white.svg" : "assets/mic_white.svg";
+        icon.alt = muted ? "Muted" : "Mic";
+    }
     btn.setAttribute("aria-label", muted ? "Unmute microphone" : "Mute microphone");
     btn.setAttribute("aria-pressed", String(muted));
 }
