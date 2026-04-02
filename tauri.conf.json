@@ -51,6 +51,35 @@
                 "alwaysOnTop": true,
                 "skipTaskbar": true,
                 "additionalBrowserArgs": "--disable-features=HardwareMediaKeyHandling"
+            },
+            {
+                "label": "overlay-2",
+                "title": "MicMuteRs Overlay 2",
+                "url": "overlay.html",
+                "width": 48,
+                "height": 48,
+                "resizable": false,
+                "decorations": false,
+                "transparent": true,
+                "visible": false,
+                "alwaysOnTop": true,
+                "skipTaskbar": true,
+                "acceptFirstMouse": false,
+                "additionalBrowserArgs": "--disable-features=HardwareMediaKeyHandling"
+            },
+            {
+                "label": "osd-2",
+                "title": "MicMuteRs OSD 2",
+                "url": "osd.html",
+                "width": 200,
+                "height": 200,
+                "resizable": false,
+                "decorations": false,
+                "transparent": true,
+                "visible": false,
+                "alwaysOnTop": true,
+                "skipTaskbar": true,
+                "additionalBrowserArgs": "--disable-features=HardwareMediaKeyHandling"
             }
         ],
         "withGlobalTauri": true,

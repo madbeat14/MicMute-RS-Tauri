@@ -278,18 +278,15 @@ pub async fn pick_audio_file(app: tauri::AppHandle) -> Result<Option<String>, St
 }
 
 /// Check if the background behind a specific overlay window is light or dark.
-/// `monitor_key` identifies which overlay window to sample (e.g., "primary", "__DISPLAY1").
+/// `window_label` identifies which overlay window to sample (e.g., "overlay", "overlay-2").
 #[tauri::command]
 pub async fn get_overlay_background_is_light(
     app: tauri::AppHandle,
-    monitor_key: Option<String>,
+    window_label: Option<String>,
 ) -> Result<bool, String> {
     use windows::Win32::Foundation::HWND;
 
-    let label = match monitor_key {
-        Some(ref key) if key != "primary" => format!("overlay-{}", crate::sanitize_label(key)),
-        _ => "overlay".to_string(),
-    };
+    let label = window_label.unwrap_or_else(|| "overlay".to_string());
 
     if let Some(overlay_win) = app.get_webview_window(&label) {
         let tauri_hwnd = overlay_win.hwnd().map_err(|e: tauri::Error| e.to_string())?;
@@ -338,4 +335,11 @@ pub async fn save_overlay_position(
 #[tauri::command]
 pub async fn get_monitors(app: tauri::AppHandle) -> Result<Vec<crate::MonitorInfo>, String> {
     Ok(crate::get_monitor_info(&app))
+}
+
+/// Return the monitor config key assigned to a given window label.
+/// Used by overlay.js to determine which per-monitor config entry applies.
+#[tauri::command]
+pub fn get_window_monitor_key(label: String) -> Option<String> {
+    crate::window_monitor_key(&label)
 }

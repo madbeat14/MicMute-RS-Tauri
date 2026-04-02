@@ -122,66 +122,36 @@ pub fn get_monitor_info(app: &AppHandle) -> Vec<MonitorInfo> {
 }
 
 // ─────────────────────────────────────────
-//  Overlay window management
+//  Static window label pools
 // ─────────────────────────────────────────
 
-/// Create a new dynamic overlay window for the given monitor key.
-fn create_overlay_window(
-    app: &AppHandle,
-    monitor_key: &str,
-    cfg: &config::OverlayConfig,
-    monitor: &MonitorInfo,
-) -> Result<(), String> {
-    let label = format!("overlay-{}", monitor_key);
+/// Fixed overlay window labels defined in tauri.conf.json.
+/// Index 0 = primary monitor, index 1 = secondary monitor.
+const OVERLAY_LABELS: &[&str] = &["overlay", "overlay-2"];
+/// Fixed OSD window labels defined in tauri.conf.json.
+const OSD_LABELS: &[&str] = &["osd", "osd-2"];
 
-    if app.get_webview_window(&label).is_some() {
-        return Ok(());
-    }
+/// Global mapping: window label → monitor config key.
+/// Populated by `sync_overlay_windows` / `sync_osd_windows` and queried by
+/// the `get_window_monitor_key` command so that overlay.js/osd.js know which
+/// per-monitor config entry applies to their window.
+static WINDOW_MONITOR_MAP: std::sync::OnceLock<
+    parking_lot::Mutex<std::collections::HashMap<String, String>>,
+> = std::sync::OnceLock::new();
 
-    let scale = cfg.scale as f64;
-    let w = if cfg.show_vu { scale + 30.0 } else { scale };
-
-    tracing::debug!(label = %label, "Creating dynamic overlay window");
-    let win = tauri::WebviewWindowBuilder::new(
-        app,
-        &label,
-        tauri::WebviewUrl::App(std::path::PathBuf::from("overlay.html")),
-    )
-    .title("MicMuteRs Overlay")
-    .inner_size(w, scale)
-    .resizable(false)
-    .decorations(false)
-    .transparent(true)
-    .visible(false)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .build()
-    .map_err(|e| e.to_string())?;
-
-    // Determine absolute position: use stored value, or place on the target monitor.
-    let (abs_x, abs_y) = if cfg.x != 0 || cfg.y != 0 {
-        (cfg.x, cfg.y)
-    } else {
-        let pos = monitor.position;
-        (pos.x + 100, pos.y + 100)
-    };
-    let _ = win.set_position(tauri::PhysicalPosition::new(abs_x, abs_y));
-
-    // Bootstrap WS_EX_LAYERED via Tauri so WebView2 per-pixel alpha works.
-    let _ = win.set_ignore_cursor_events(true);
-    if !cfg.locked {
-        if let Ok(tauri_hwnd) = win.hwnd() {
-            use windows::Win32::Foundation::HWND;
-            let hwnd = HWND(tauri_hwnd.0);
-            crate::utils::set_click_through(hwnd, false);
-        }
-    }
-
-    let _ = win.show();
-    let _ = win.set_always_on_top(true);
-
-    Ok(())
+fn get_window_monitor_map(
+) -> &'static parking_lot::Mutex<std::collections::HashMap<String, String>> {
+    WINDOW_MONITOR_MAP.get_or_init(|| parking_lot::Mutex::new(std::collections::HashMap::new()))
 }
+
+/// Return the monitor config key assigned to a given window label.
+pub fn window_monitor_key(label: &str) -> Option<String> {
+    get_window_monitor_map().lock().get(label).cloned()
+}
+
+// ─────────────────────────────────────────
+//  Overlay window management
+// ─────────────────────────────────────────
 
 /// Apply sizing and click-through settings to an existing overlay window.
 fn apply_overlay_config(win: &tauri::WebviewWindow, cfg: &config::OverlayConfig) {
@@ -199,43 +169,50 @@ fn apply_overlay_config(win: &tauri::WebviewWindow, cfg: &config::OverlayConfig)
     let _ = win.set_always_on_top(true);
 }
 
-/// Compute the Tauri window label for an overlay given its config map key.
-/// The "primary" key reuses the static "overlay" window; other keys use "overlay-{key}".
-fn overlay_label(key: &str) -> String {
-    if key == "primary" {
-        "overlay".to_string()
-    } else {
-        format!("overlay-{}", key)
-    }
-}
-
 /// Show/hide/configure overlay windows for every connected monitor.
-/// Only operates on windows that already exist — never creates new ones.
-/// Window creation is handled by the startup background thread.
+/// Maps monitors to static window labels by index (primary first).
+/// Updates the global window→monitor mapping so overlay.js can query its config key.
 pub fn sync_overlay_windows(app: &AppHandle, config: &config::AppConfig, monitors: &[MonitorInfo]) {
-    let mut desired_labels: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Sort monitors: primary first, then others.
+    let mut sorted: Vec<&MonitorInfo> = monitors.iter().collect();
+    sorted.sort_by_key(|m| !m.is_primary);
 
-    for mon in monitors {
+    let mut map = get_window_monitor_map().lock();
+
+    for (idx, mon) in sorted.iter().enumerate() {
+        if idx >= OVERLAY_LABELS.len() {
+            break;
+        }
+        let label = OVERLAY_LABELS[idx];
         let key = &mon.label_key;
-        let label = overlay_label(key);
+        map.insert(label.to_string(), key.clone());
+
         let overlay_cfg = config.persistent_overlay.get(key).cloned().unwrap_or_default();
 
-        if overlay_cfg.enabled {
-            desired_labels.insert(label.clone());
-            if let Some(win) = app.get_webview_window(&label) {
+        if let Some(win) = app.get_webview_window(label) {
+            if overlay_cfg.enabled {
                 apply_overlay_config(&win, &overlay_cfg);
+                if overlay_cfg.x != 0 || overlay_cfg.y != 0 {
+                    let _ = win.set_position(tauri::PhysicalPosition::new(
+                        overlay_cfg.x,
+                        overlay_cfg.y,
+                    ));
+                } else {
+                    let _ = win.set_position(tauri::PhysicalPosition::new(
+                        mon.position.x + 100,
+                        mon.position.y + 100,
+                    ));
+                }
                 let _ = win.show();
+            } else {
+                let _ = win.hide();
             }
-            // If window doesn't exist yet, it will be shown when the
-            // window-init thread creates it (or on next app restart).
-        } else if let Some(win) = app.get_webview_window(&label) {
-            let _ = win.hide();
         }
     }
 
-    // Hide any dynamic windows that don't belong to a currently connected and enabled monitor.
-    for (label, win) in app.webview_windows() {
-        if label.starts_with("overlay-") && !desired_labels.contains(label.as_str()) {
+    // Hide unused static overlay windows (more labels than monitors).
+    for idx in sorted.len()..OVERLAY_LABELS.len() {
+        if let Some(win) = app.get_webview_window(OVERLAY_LABELS[idx]) {
             let _ = win.hide();
         }
     }
@@ -245,70 +222,34 @@ pub fn sync_overlay_windows(app: &AppHandle, config: &config::AppConfig, monitor
 //  OSD window management
 // ─────────────────────────────────────────
 
-/// Create a new dynamic OSD window for the given monitor key (initially hidden).
-fn create_osd_window(
-    app: &AppHandle,
-    monitor_key: &str,
-    cfg: &config::OsdConfig,
-) -> Result<(), String> {
-    let label = format!("osd-{}", monitor_key);
-
-    if app.get_webview_window(&label).is_some() {
-        return Ok(());
-    }
-
-    let size = cfg.size as f64;
-    tracing::debug!(label = %label, "Creating dynamic OSD window");
-
-    let _win = tauri::WebviewWindowBuilder::new(
-        app,
-        &label,
-        tauri::WebviewUrl::App(std::path::PathBuf::from("osd.html")),
-    )
-    .title("MicMuteRs OSD")
-    .inner_size(size, size)
-    .resizable(false)
-    .decorations(false)
-    .transparent(true)
-    .visible(false)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .build()
-    .map_err(|e| e.to_string())?;
-
-    Ok(())
-}
-
-/// Compute the Tauri window label for an OSD given its config map key.
-/// The "primary" key reuses the static "osd" window; other keys use "osd-{key}".
-fn osd_label(key: &str) -> String {
-    if key == "primary" {
-        "osd".to_string()
-    } else {
-        format!("osd-{}", key)
-    }
-}
-
-/// Show/hide OSD windows for enabled monitors. Only operates on existing windows.
-/// Window creation is handled by the startup background thread.
+/// Show/hide OSD windows for enabled monitors.
+/// Maps monitors to static OSD window labels by index (primary first).
+/// Updates the global window→monitor mapping.
 pub fn sync_osd_windows(app: &AppHandle, config: &config::AppConfig, monitors: &[MonitorInfo]) {
-    let mut enabled_labels: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut sorted: Vec<&MonitorInfo> = monitors.iter().collect();
+    sorted.sort_by_key(|m| !m.is_primary);
 
-    for mon in monitors {
+    let mut map = get_window_monitor_map().lock();
+
+    for (idx, mon) in sorted.iter().enumerate() {
+        if idx >= OSD_LABELS.len() {
+            break;
+        }
+        let label = OSD_LABELS[idx];
         let key = &mon.label_key;
-        let label = osd_label(key);
-        let osd_cfg = config.osd.get(key).cloned().unwrap_or_default();
+        map.insert(label.to_string(), key.clone());
 
-        if osd_cfg.enabled {
-            enabled_labels.insert(label.clone());
-        } else if let Some(win) = app.get_webview_window(&label) {
-            let _ = win.hide();
+        let osd_cfg = config.osd.get(key).cloned().unwrap_or_default();
+        if !osd_cfg.enabled {
+            if let Some(win) = app.get_webview_window(label) {
+                let _ = win.hide();
+            }
         }
     }
 
-    // Hide dynamic OSD windows not in the enabled set.
-    for (label, win) in app.webview_windows() {
-        if label.starts_with("osd-") && !enabled_labels.contains(label.as_str()) {
+    // Hide unused static OSD windows.
+    for idx in sorted.len()..OSD_LABELS.len() {
+        if let Some(win) = app.get_webview_window(OSD_LABELS[idx]) {
             let _ = win.hide();
         }
     }
@@ -971,29 +912,17 @@ pub fn run() {
                 tracing::debug!("Spawning hotkey loop");
                 spawn_hotkey_loop(app.handle().clone(), Arc::clone(&state));
 
-                // ── Configure the static overlay window ──
-                // Only use the 3 static windows from tauri.conf.json (settings,
-                // overlay, osd). WebView2 dynamic window creation deadlocks the
-                // main thread regardless of which thread calls build().
+                // ── Configure static overlay & OSD windows ──
+                // Uses index-based mapping: primary monitor → overlay/osd,
+                // second monitor → overlay-2/osd-2.
                 {
-                    let overlay_cfg = cfg.persistent_overlay
-                        .get("primary")
-                        .cloned()
-                        .or_else(|| cfg.persistent_overlay.values().next().cloned())
-                        .unwrap_or_default();
-
-                    if let Some(win) = app.get_webview_window("overlay") {
-                        apply_overlay_config(&win, &overlay_cfg);
-                        if overlay_cfg.x != 0 || overlay_cfg.y != 0 {
-                            let _ = win.set_position(tauri::PhysicalPosition::new(
-                                overlay_cfg.x, overlay_cfg.y,
-                            ));
-                        }
-                        if overlay_cfg.enabled {
-                            let _ = win.show();
-                        }
-                        tracing::info!("Static overlay window configured");
-                    }
+                    let monitors = get_monitor_info(app.handle());
+                    sync_overlay_windows(app.handle(), &cfg, &monitors);
+                    sync_osd_windows(app.handle(), &cfg, &monitors);
+                    tracing::info!(
+                        monitor_count = monitors.len(),
+                        "Static overlay/OSD windows configured"
+                    );
                 }
 
                 tracing::info!("Tauri setup complete");
@@ -1021,6 +950,7 @@ pub fn run() {
             commands::save_overlay_position,
             commands::get_overlay_topmost_interval,
             commands::get_monitors,
+            commands::get_window_monitor_key,
         ])
         .run(tauri::generate_context!())
         .expect("fatal error while running tauri application");
@@ -1057,22 +987,27 @@ pub fn update_tray_icon(app: &AppHandle, is_muted: bool) {
 //  OSD trigger (multi-monitor)
 // ─────────────────────────────────────────
 pub fn trigger_osd(app: &AppHandle, is_muted: bool, cfg: &config::AppConfig, monitors: &[MonitorInfo]) {
-    for mon in monitors {
+    // Sort monitors: primary first (same order as sync_osd_windows).
+    let mut sorted: Vec<&MonitorInfo> = monitors.iter().collect();
+    sorted.sort_by_key(|m| !m.is_primary);
+
+    for (idx, mon) in sorted.iter().enumerate() {
+        if idx >= OSD_LABELS.len() {
+            break;
+        }
+        let label = OSD_LABELS[idx];
         let key = &mon.label_key;
         let osd_cfg = match cfg.osd.get(key) {
             Some(c) if c.enabled => c,
             _ => continue,
         };
 
-        let label = osd_label(key);
         let duration = osd_cfg.duration;
         let size = osd_cfg.size;
         let opacity = osd_cfg.opacity;
         let position = osd_cfg.position.clone();
 
-        // Get the OSD window for this monitor.
-        // Windows are created ahead of time by sync_osd_windows.
-        let osd_win = app.get_webview_window(&label);
+        let osd_win = app.get_webview_window(label);
 
         if let Some(osd_win) = osd_win {
             let _ = osd_win.set_size(tauri::LogicalSize::new(size as f64, size as f64));
@@ -1081,7 +1016,7 @@ pub fn trigger_osd(app: &AppHandle, is_muted: bool, cfg: &config::AppConfig, mon
             let mon_pos = mon.position;
             let mon_size = mon.size;
             let scale = mon.scale_factor;
-            
+
             let mon_w = mon_size.width as f64 / scale;
             let mon_h = mon_size.height as f64 / scale;
             let w = size as f64;
@@ -1105,13 +1040,15 @@ pub fn trigger_osd(app: &AppHandle, is_muted: bool, cfg: &config::AppConfig, mon
             );
 
             // Schedule hide via per-monitor timer.
-            // Create the timer outside the lock so we don't hold the mutex
-            // while spawning a thread.
-            if !get_osd_timers().lock().contains_key(&label) {
+            let label_owned = label.to_string();
+            if !get_osd_timers().lock().contains_key(&label_owned) {
                 let new_timer = OsdTimer::new();
-                get_osd_timers().lock().entry(label.clone()).or_insert(new_timer);
+                get_osd_timers()
+                    .lock()
+                    .entry(label_owned.clone())
+                    .or_insert(new_timer);
             }
-            if let Some(timer) = get_osd_timers().lock().get_mut(&label) {
+            if let Some(timer) = get_osd_timers().lock().get_mut(&label_owned) {
                 timer.schedule_hide(osd_win, std::time::Duration::from_millis(duration as u64));
             }
         }
@@ -1167,15 +1104,9 @@ fn handle_tray_event(app: &AppHandle, id: &str, state: &Arc<AppState>) {
             if let Err(e) = cfg.save() {
                 tracing::error!("{}", e);
             }
-            // Show/hide the static overlay window
-            if let Some(win) = app.get_webview_window("overlay") {
-                let any_enabled = cfg.persistent_overlay.values().any(|o| o.enabled);
-                if any_enabled {
-                    let _ = win.show();
-                } else {
-                    let _ = win.hide();
-                }
-            }
+            // Show/hide all static overlay windows
+            let monitors = get_monitor_info(app);
+            sync_overlay_windows(app, &cfg, &monitors);
             sync_tray_and_emit(app, state, &cfg);
         }
 

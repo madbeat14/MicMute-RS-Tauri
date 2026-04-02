@@ -1,6 +1,6 @@
 // Overlay window logic
-// The static "overlay" window serves the primary monitor (monitorKey = "primary").
-// Additional monitors use dynamically-created "overlay-<monitorKey>" windows.
+// Static windows "overlay" and "overlay-2" are mapped to monitors by index.
+// The backend assigns each window a monitor config key via get_window_monitor_key.
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
@@ -14,14 +14,12 @@ let dragTimeout = null;
 let unlistenState = null;
 let unlistenConfig = null;
 
-// Derive the monitor key from this window's label.
-// "overlay" (static primary window) → "primary"
-// "overlay-<key>" (dynamic window) → "<key>"
 const { getCurrentWindow } = window.__TAURI__.window;
 const _selfWin = getCurrentWindow();
 const _label = _selfWin.label;
-const monitorKey = _label === 'overlay' ? 'primary'
-    : (_label.startsWith('overlay-') ? _label.slice('overlay-'.length) : null);
+
+// Monitor config key — resolved from backend during init.
+let monitorKey = null;
 
 /**
  * Returns the OverlayConfig entry for this window's monitor key, with
@@ -36,12 +34,17 @@ function getMyConfig() {
 }
 
 async function init() {
-    // Should never happen — all overlay windows have a valid monitorKey.
-    if (!monitorKey) return;
+    // Query the backend for which monitor config key this window is assigned to.
+    try {
+        monitorKey = await invoke("get_window_monitor_key", { label: _label });
+    } catch (e) {
+        console.error("overlay: failed to get monitor key:", e);
+    }
+    if (!monitorKey) monitorKey = "primary"; // fallback
 
     try {
-        config = await invoke("get_config");       
-        const state = await invoke("get_state");   
+        config = await invoke("get_config");
+        const state = await invoke("get_state");
         isMuted = state.is_muted;
 
         await updateIcon();
@@ -140,7 +143,7 @@ async function updateIcon() {
     } else {
         // Auto mode: sample the background behind this specific overlay window
         try {
-            isLight = await invoke("get_overlay_background_is_light", { monitorKey });
+            isLight = await invoke("get_overlay_background_is_light", { windowLabel: _label });
         } catch (e) {
             console.error("Failed to get background theme:", e);
             isLight = window.matchMedia("(prefers-color-scheme: light)").matches;
