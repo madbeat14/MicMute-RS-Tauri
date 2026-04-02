@@ -1113,8 +1113,11 @@ fn handle_tray_event(app: &AppHandle, id: &str, state: &Arc<AppState>) {
         "toggle_boot" => {
             let current = startup::get_run_on_startup();
             startup::set_run_on_startup(!current);
+            let actual = startup::get_run_on_startup();
             let cfg = state.config.lock().clone();
             sync_tray_and_emit(app, state, &cfg);
+            // Notify settings UI so its checkbox stays in sync
+            let _ = app.emit("startup-changed", serde_json::json!({ "enabled": actual }));
         }
         "settings" => {
             tracing::info!("Settings menu item clicked");

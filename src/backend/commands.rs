@@ -221,10 +221,20 @@ pub async fn get_recorded_hotkey(state: State<'_, Arc<AppState>>) -> Result<u32,
 }
 
 /// Enable or disable "run on startup" via Windows Task Scheduler.
+/// Returns the actual scheduler state after the operation so the UI can
+/// confirm whether it succeeded, and rebuilds the tray menu to keep it in sync.
 #[tauri::command]
-pub async fn set_run_on_startup_cmd(enabled: bool) -> Result<(), String> {
-    startup::set_run_on_startup(enabled);
-    Ok(())
+pub async fn set_run_on_startup_cmd(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+    enable: bool,
+) -> Result<bool, String> {
+    startup::set_run_on_startup(enable);
+    let actual = startup::get_run_on_startup();
+    // Rebuild tray menu so the checkmark reflects the new state
+    let cfg = state.config.lock().clone();
+    crate::sync_tray_and_emit(&app, &state, &cfg);
+    Ok(actual)
 }
 
 /// Get current "run on startup" status.

@@ -6,14 +6,15 @@ A lightweight Windows microphone mute utility built with Rust and [Tauri v2](htt
 
 ## Features
 
-- **Global hotkey** — Toggle mute with any key combination
-- **System tray** — Mute/unmute from the tray icon with theme-aware icons
-- **Always-on-top overlay** — Persistent resizable draggable indicator showing mute state and voice activity
+- **Global hotkey** — Toggle or separate mute/unmute with any key (media keys supported)
+- **System tray** — Mute/unmute from the tray icon; left-click toggles, right-click opens menu
+- **Always-on-top overlay** — Persistent draggable indicator showing mute state and voice activity
 - **On-screen display (OSD)** — Transient notification popup on mute toggle
+- **Multi-monitor support** — Independent overlay and OSD on up to two monitors with per-monitor settings
 - **Multi-device sync** — Control multiple microphones simultaneously
 - **AFK auto-mute** — Automatically mutes after configurable idle timeout, restores on activity
-- **Audio feedback** — Beep or custom WAV sound on mute/unmute
-- **Run on startup** — Windows Task Scheduler integration
+- **Audio feedback** — Beep or custom WAV sound on mute/unmute with adjustable volume
+- **Run on startup** — Windows Task Scheduler integration (synced between tray menu and settings)
 - **Theme detection** — Auto-detects system light/dark theme; overlay analyzes screen pixels behind it for optimal icon color
 - **Portable** — Single executable, no installer required
 
@@ -21,9 +22,13 @@ A lightweight Windows microphone mute utility built with Rust and [Tauri v2](htt
 
 ### Download
 
-Download the latest `mic-mute-rs.exe` from the [Releases](https://github.com/madbeat14/MicMute-RS-Tauri/releases) page.
+Download the latest installer or standalone executable from the [Releases](https://github.com/madbeat14/MicMute-RS-Tauri/releases) page:
 
-No installation needed — just run the executable.
+| File | Description |
+|------|-------------|
+| `MicMuteRs_x.x.x_x64-setup.exe` | NSIS installer (recommended) |
+| `MicMuteRs_x.x.x_x64_en-US.msi` | MSI installer |
+| `mic-mute-rs.exe` | Standalone portable executable |
 
 ### Build from source
 
@@ -47,14 +52,16 @@ The executable will be at `target/release/mic-mute-rs.exe`.
 |-----|---------|
 | **Devices** | Select primary microphone, add sync devices |
 | **Audio** | Enable beep or custom WAV feedback, adjust volume/frequency |
-| **Hotkeys** | Record a toggle hotkey |
-| **Overlay** | Enable/disable overlay, adjust size, lock position, auto-theme |
-| **OSD** | Enable/disable on-screen display, set duration and position |
+| **Hotkeys** | Toggle or separate mute/unmute hotkeys |
+| **Overlay** | Per-monitor overlay — size, opacity, lock position, theme |
+| **OSD** | Per-monitor OSD — duration, size, position |
 | **System & Startup** | Run on login, AFK auto-mute timeout |
 
 ## Configuration
 
-Settings are saved to `%APPDATA%\MicMute\mic_config.json` and persist across restarts. Changes apply immediately.
+Settings are saved to `%LOCALAPPDATA%\MicMute\mic_config.json` and persist across restarts. Changes apply immediately.
+
+Config is automatically migrated from older versions (flat overlay/OSD objects to per-monitor HashMaps).
 
 ## Tech Stack
 

@@ -471,7 +471,13 @@ function bindSystemListeners() {
     bindSlider("slider-afk-timeout", "afk-timeout-val", v => window.config.afk.timeout = v);
 
     document.getElementById("chk-startup").addEventListener("change", async e => {
-        await invoke("set_run_on_startup_cmd", { enable: e.target.checked });
+        const actual = await invoke("set_run_on_startup_cmd", { enable: e.target.checked });
+        e.target.checked = actual;
+    });
+
+    // Keep checkbox in sync when toggled from the tray menu
+    listen("startup-changed", e => {
+        document.getElementById("chk-startup").checked = e.payload.enabled;
     });
 }
 
