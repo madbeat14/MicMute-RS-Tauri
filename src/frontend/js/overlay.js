@@ -70,8 +70,14 @@ async function init() {
     });
 
     if (unlistenConfig) unlistenConfig();
-    unlistenConfig = await listen("config-update", e => {
+    unlistenConfig = await listen("config-update", async e => {
         config = e.payload.config;
+        // Re-query monitor key in case the mapping was populated after our
+        // initial init (race during startup).
+        try {
+            const key = await invoke("get_window_monitor_key", { label: _label });
+            if (key) monitorKey = key;
+        } catch (_) {}
         updateDragRegion();
         updateIcon();
     });

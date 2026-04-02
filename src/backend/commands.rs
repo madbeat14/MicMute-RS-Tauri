@@ -110,25 +110,20 @@ pub async fn update_config(
         tracing::error!("{}", e);
     }
 
-    // Update hotkeys
+    // Update hotkeys — register ALL configured VKs regardless of mode.
+    // The hook must always consume the key (prevent pass-through to Windows).
+    // The hotkey loop in lib.rs routes based on mode, so registering extra
+    // VKs is safe — they just won't trigger any action in the wrong mode.
     let get_vk = |val: &serde_json::Value| -> u32 {
         val.get("vk").and_then(|v| v.as_u64()).unwrap_or(0) as u32
     };
     let mut vks: Vec<u32> = Vec::new();
-    let mode = new_config.hotkey_mode.as_str();
-    if mode == "toggle" {
-        if let Some(h) = new_config.hotkey.get("toggle") {
+    for key in &["toggle", "mute", "unmute"] {
+        if let Some(h) = new_config.hotkey.get(*key) {
             let v = get_vk(h);
-            if v != 0 { vks.push(v); }
-        }
-    } else {
-        if let Some(h) = new_config.hotkey.get("mute") {
-            let v = get_vk(h);
-            if v != 0 { vks.push(v); }
-        }
-        if let Some(h) = new_config.hotkey.get("unmute") {
-            let v = get_vk(h);
-            if v != 0 { vks.push(v); }
+            if v != 0 && !vks.contains(&v) {
+                vks.push(v);
+            }
         }
     }
     {
