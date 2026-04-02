@@ -19,39 +19,358 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
 
-/// Message sent to the audio feedback worker thread.
-struct AudioFeedbackMsg {
-    stream_handle: rodio::OutputStreamHandle,
-    is_muted: bool,
-    config: config::AppConfig,
+/// Message sent to the audio worker thread.
+pub enum AudioMsg {
+    /// Toggle mute state. Uses the provided config for sync logic.
+    ToggleMute(config::AppConfig),
+    /// Set explicit mute state.
+    SetMute(bool, config::AppConfig),
+    /// Change the active audio device.
+    SetDevice(Option<String>),
+    /// Play a sound preview. (mode, key, config)
+    PlayPreview(String, String, config::AppConfig),
+    /// Refresh the list of available audio devices.
+    RefreshDevices,
 }
 
 // ─────────────────────────────────────────
 //  Shared application state
 // ─────────────────────────────────────────
 pub struct AppState {
-    pub audio: Mutex<audio::AudioController>,
     pub config: Mutex<config::AppConfig>,
     pub hotkeys: Mutex<hotkey::HotkeyManager>,
     pub is_muted: Mutex<bool>,
+    /// Latest peak level (0.0 to 1.0) stored as fixed-point (0 to 10000).
+    pub peak_level: std::sync::atomic::AtomicU32,
     pub available_devices: Mutex<Vec<(String, String)>>,
-    /// Channel to send audio feedback work to a single persistent worker thread,
-    /// avoiding per-toggle thread spawns (~1MB stack each).
-    audio_feedback_tx: std_mpsc::SyncSender<AudioFeedbackMsg>,
+    pub audio_tx: std_mpsc::SyncSender<AudioMsg>,
+    pub tray: Mutex<Option<tauri::tray::TrayIcon>>,
 }
 
 /// # Safety Invariants
 ///
-/// 1. All COM interfaces are accessed only from the main thread (STA) —
-///    `do_toggle_mute` and `do_set_mute` use `app_clone.run_on_main_thread()`
-///    to dispatch COM calls back to the STA thread.
-/// 2. `OutputStream` is created on the main thread and never moved.
-/// 3. The `rodio` `OutputStream` is not Send, but we ensure it's only
-///    accessed through the Mutex on the thread that created it.
-/// 4. Tauri `async` commands run on tokio threads but audio access is
-///    serialized via the Mutex, and COM is re-initialized per-thread.
+/// 1. All COM interfaces are managed by the dedicated audio worker thread.
+/// 2. `OutputStream` is kept on the worker thread and never moved.
+/// 3. Communication with the audio worker is via a thread-safe SyncSender.
 unsafe impl Send for AppState {}
 unsafe impl Sync for AppState {}
+
+// ─────────────────────────────────────────
+//  Monitor helpers
+// ─────────────────────────────────────────
+
+/// Sanitize a monitor name to be a valid Tauri window label component.
+/// Replaces non-alphanumeric characters (except hyphens) with underscores.
+pub fn sanitize_label(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' })
+        .collect()
+}
+
+/// Snapshot of monitor properties to avoid blocking calls on the main thread.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct MonitorInfo {
+    pub name: String,
+    pub label_key: String,
+    pub is_primary: bool,
+    pub position: tauri::PhysicalPosition<i32>,
+    pub size: tauri::PhysicalSize<u32>,
+    pub scale_factor: f64,
+}
+
+/// Gather information about all currently connected monitors.
+pub fn get_monitor_info(app: &AppHandle) -> Vec<MonitorInfo> {
+    let monitors = app.available_monitors().unwrap_or_default();
+    let primary = app.primary_monitor().ok().flatten();
+    let primary_name = primary.as_ref().and_then(|m| m.name()).map(|n| n.to_string());
+
+    let mut infos: Vec<MonitorInfo> = monitors
+        .into_iter()
+        .map(|m| {
+            let name = m.name().map(|n| n.as_str()).unwrap_or("Unknown").to_string();
+            let is_primary = primary_name.as_deref() == Some(&name);
+            let label_key = if is_primary {
+                "primary".to_string()
+            } else {
+                sanitize_label(&name)
+            };
+            MonitorInfo {
+                name,
+                label_key,
+                is_primary,
+                position: *m.position(),
+                size: *m.size(),
+                scale_factor: m.scale_factor(),
+            }
+        })
+        .collect();
+
+    // If no monitor was detected as primary (name mismatch between
+    // primary_monitor() and available_monitors()), treat the first monitor
+    // as primary so that the "primary" config key gets used.
+    if !infos.is_empty() && !infos.iter().any(|m| m.is_primary) {
+        tracing::debug!(
+            primary_name = ?primary_name,
+            first_monitor = %infos[0].name,
+            "Primary monitor name mismatch — treating first monitor as primary"
+        );
+        infos[0].is_primary = true;
+        infos[0].label_key = "primary".to_string();
+    }
+
+    infos
+}
+
+// ─────────────────────────────────────────
+//  Overlay window management
+// ─────────────────────────────────────────
+
+/// Create a new dynamic overlay window for the given monitor key.
+fn create_overlay_window(
+    app: &AppHandle,
+    monitor_key: &str,
+    cfg: &config::OverlayConfig,
+    monitor: &MonitorInfo,
+) -> Result<(), String> {
+    let label = format!("overlay-{}", monitor_key);
+
+    if app.get_webview_window(&label).is_some() {
+        return Ok(());
+    }
+
+    let scale = cfg.scale as f64;
+    let w = if cfg.show_vu { scale + 30.0 } else { scale };
+
+    tracing::debug!(label = %label, "Creating dynamic overlay window");
+    let win = tauri::WebviewWindowBuilder::new(
+        app,
+        &label,
+        tauri::WebviewUrl::App(std::path::PathBuf::from("overlay.html")),
+    )
+    .title("MicMuteRs Overlay")
+    .inner_size(w, scale)
+    .resizable(false)
+    .decorations(false)
+    .transparent(true)
+    .visible(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .build()
+    .map_err(|e| e.to_string())?;
+
+    // Determine absolute position: use stored value, or place on the target monitor.
+    let (abs_x, abs_y) = if cfg.x != 0 || cfg.y != 0 {
+        (cfg.x, cfg.y)
+    } else {
+        let pos = monitor.position;
+        (pos.x + 100, pos.y + 100)
+    };
+    let _ = win.set_position(tauri::PhysicalPosition::new(abs_x, abs_y));
+
+    // Bootstrap WS_EX_LAYERED via Tauri so WebView2 per-pixel alpha works.
+    let _ = win.set_ignore_cursor_events(true);
+    if !cfg.locked {
+        if let Ok(tauri_hwnd) = win.hwnd() {
+            use windows::Win32::Foundation::HWND;
+            let hwnd = HWND(tauri_hwnd.0);
+            crate::utils::set_click_through(hwnd, false);
+        }
+    }
+
+    let _ = win.show();
+    let _ = win.set_always_on_top(true);
+
+    Ok(())
+}
+
+/// Apply sizing and click-through settings to an existing overlay window.
+fn apply_overlay_config(win: &tauri::WebviewWindow, cfg: &config::OverlayConfig) {
+    let scale = cfg.scale as f64;
+    let w = if cfg.show_vu { scale + 30.0 } else { scale };
+    let _ = win.set_size(tauri::LogicalSize::new(w, scale));
+    let _ = win.set_ignore_cursor_events(true);
+    if !cfg.locked {
+        if let Ok(tauri_hwnd) = win.hwnd() {
+            use windows::Win32::Foundation::HWND;
+            let hwnd = HWND(tauri_hwnd.0);
+            crate::utils::set_click_through(hwnd, false);
+        }
+    }
+    let _ = win.set_always_on_top(true);
+}
+
+/// Compute the Tauri window label for an overlay given its config map key.
+/// The "primary" key reuses the static "overlay" window; other keys use "overlay-{key}".
+fn overlay_label(key: &str) -> String {
+    if key == "primary" {
+        "overlay".to_string()
+    } else {
+        format!("overlay-{}", key)
+    }
+}
+
+/// Show/hide/configure overlay windows for every connected monitor.
+/// Only operates on windows that already exist — never creates new ones.
+/// Window creation is handled by the startup background thread.
+pub fn sync_overlay_windows(app: &AppHandle, config: &config::AppConfig, monitors: &[MonitorInfo]) {
+    let mut desired_labels: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for mon in monitors {
+        let key = &mon.label_key;
+        let label = overlay_label(key);
+        let overlay_cfg = config.persistent_overlay.get(key).cloned().unwrap_or_default();
+
+        if overlay_cfg.enabled {
+            desired_labels.insert(label.clone());
+            if let Some(win) = app.get_webview_window(&label) {
+                apply_overlay_config(&win, &overlay_cfg);
+                let _ = win.show();
+            }
+            // If window doesn't exist yet, it will be shown when the
+            // window-init thread creates it (or on next app restart).
+        } else if let Some(win) = app.get_webview_window(&label) {
+            let _ = win.hide();
+        }
+    }
+
+    // Hide any dynamic windows that don't belong to a currently connected and enabled monitor.
+    for (label, win) in app.webview_windows() {
+        if label.starts_with("overlay-") && !desired_labels.contains(label.as_str()) {
+            let _ = win.hide();
+        }
+    }
+}
+
+// ─────────────────────────────────────────
+//  OSD window management
+// ─────────────────────────────────────────
+
+/// Create a new dynamic OSD window for the given monitor key (initially hidden).
+fn create_osd_window(
+    app: &AppHandle,
+    monitor_key: &str,
+    cfg: &config::OsdConfig,
+) -> Result<(), String> {
+    let label = format!("osd-{}", monitor_key);
+
+    if app.get_webview_window(&label).is_some() {
+        return Ok(());
+    }
+
+    let size = cfg.size as f64;
+    tracing::debug!(label = %label, "Creating dynamic OSD window");
+
+    let _win = tauri::WebviewWindowBuilder::new(
+        app,
+        &label,
+        tauri::WebviewUrl::App(std::path::PathBuf::from("osd.html")),
+    )
+    .title("MicMuteRs OSD")
+    .inner_size(size, size)
+    .resizable(false)
+    .decorations(false)
+    .transparent(true)
+    .visible(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .build()
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// Compute the Tauri window label for an OSD given its config map key.
+/// The "primary" key reuses the static "osd" window; other keys use "osd-{key}".
+fn osd_label(key: &str) -> String {
+    if key == "primary" {
+        "osd".to_string()
+    } else {
+        format!("osd-{}", key)
+    }
+}
+
+/// Show/hide OSD windows for enabled monitors. Only operates on existing windows.
+/// Window creation is handled by the startup background thread.
+pub fn sync_osd_windows(app: &AppHandle, config: &config::AppConfig, monitors: &[MonitorInfo]) {
+    let mut enabled_labels: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for mon in monitors {
+        let key = &mon.label_key;
+        let label = osd_label(key);
+        let osd_cfg = config.osd.get(key).cloned().unwrap_or_default();
+
+        if osd_cfg.enabled {
+            enabled_labels.insert(label.clone());
+        } else if let Some(win) = app.get_webview_window(&label) {
+            let _ = win.hide();
+        }
+    }
+
+    // Hide dynamic OSD windows not in the enabled set.
+    for (label, win) in app.webview_windows() {
+        if label.starts_with("osd-") && !enabled_labels.contains(label.as_str()) {
+            let _ = win.hide();
+        }
+    }
+}
+
+// ─────────────────────────────────────────
+//  Per-monitor OSD hide timer
+// ─────────────────────────────────────────
+
+struct OsdTimer {
+    tx: std_mpsc::Sender<OsdHideMsg>,
+    generation: Arc<std::sync::atomic::AtomicU64>,
+}
+
+struct OsdHideMsg {
+    win: tauri::WebviewWindow,
+    delay: std::time::Duration,
+    generation: u64,
+}
+
+impl OsdTimer {
+    fn new() -> Self {
+        let generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let gen_clone = Arc::clone(&generation);
+        let (tx, rx) = std_mpsc::channel::<OsdHideMsg>();
+        std::thread::Builder::new()
+            .name("osd-timer".into())
+            .spawn(move || {
+                while let Ok(mut msg) = rx.recv() {
+                    // Drain any queued messages, keeping only the latest one.
+                    // Without this, a burst of schedule_hide calls would cause
+                    // the worker to sleep N×delay instead of just delay.
+                    while let Ok(newer) = rx.try_recv() {
+                        msg = newer;
+                    }
+                    std::thread::sleep(msg.delay);
+                    if gen_clone.load(std::sync::atomic::Ordering::SeqCst) == msg.generation {
+                        let _ = msg.win.hide();
+                    }
+                }
+            })
+            .expect("failed to spawn OSD timer thread");
+        Self { tx, generation }
+    }
+
+    fn schedule_hide(&self, win: tauri::WebviewWindow, delay: std::time::Duration) {
+        let new_gen = self
+            .generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        let _ = self.tx.send(OsdHideMsg { win, delay, generation: new_gen });
+    }
+}
+
+/// Per-monitor OSD timer registry. Keyed by OSD window label (e.g., "osd-primary").
+static OSD_TIMERS: std::sync::OnceLock<
+    parking_lot::Mutex<std::collections::HashMap<String, OsdTimer>>,
+> = std::sync::OnceLock::new();
+
+fn get_osd_timers() -> &'static parking_lot::Mutex<std::collections::HashMap<String, OsdTimer>> {
+    OSD_TIMERS.get_or_init(|| parking_lot::Mutex::new(std::collections::HashMap::new()))
+}
 
 // ─────────────────────────────────────────
 //  Tray helpers
@@ -60,16 +379,16 @@ pub(crate) fn build_tray_menu<M: Manager<tauri::Wry>>(
     app: &M,
     cfg: &config::AppConfig,
     devices: &[(String, String)],
-) -> Menu<tauri::Wry> {
-    let menu = Menu::new(app).unwrap();
+) -> Result<Menu<tauri::Wry>, tauri::Error> {
+    let menu = Menu::new(app)?;
 
     let toggle_item =
-        MenuItem::with_id(app, "toggle_mute", "Toggle Mute", true, None::<&str>).unwrap();
+        MenuItem::with_id(app, "toggle_mute", "Toggle Mute", true, None::<&str>)?;
     let _ = menu.append(&toggle_item);
-    let _ = menu.append(&PredefinedMenuItem::separator(app).unwrap());
+    let _ = menu.append(&PredefinedMenuItem::separator(app)?);
 
     // Microphone submenu
-    let mic_menu = Submenu::new(app, "Select Microphone", true).unwrap();
+    let mic_menu = Submenu::new(app, "Select Microphone", true)?;
     let default_item = CheckMenuItem::with_id(
         app,
         "mic_default",
@@ -77,18 +396,21 @@ pub(crate) fn build_tray_menu<M: Manager<tauri::Wry>>(
         true,
         cfg.device_id.is_none(),
         None::<&str>,
-    )
-    .unwrap();
+    )?;
     let _ = mic_menu.append(&default_item);
     for (id, name) in devices {
         let is_sel = cfg.device_id.as_ref() == Some(id);
         let key = format!("mic_{}", id);
-        let item = CheckMenuItem::with_id(app, key, name, true, is_sel, None::<&str>).unwrap();
+        let item = CheckMenuItem::with_id(app, key, name, true, is_sel, None::<&str>)?;
         let _ = mic_menu.append(&item);
     }
     let _ = menu.append(&mic_menu);
 
-    let _ = menu.append(&PredefinedMenuItem::separator(app).unwrap());
+    let _ = menu.append(&PredefinedMenuItem::separator(app)?);
+
+    // Tray checkmarks reflect whether ANY monitor has the feature enabled
+    let osd_any_enabled = cfg.osd.values().any(|o| o.enabled);
+    let overlay_any_enabled = cfg.persistent_overlay.values().any(|o| o.enabled);
 
     let sound_item = CheckMenuItem::with_id(
         app,
@@ -97,26 +419,23 @@ pub(crate) fn build_tray_menu<M: Manager<tauri::Wry>>(
         true,
         cfg.beep_enabled,
         None::<&str>,
-    )
-    .unwrap();
+    )?;
     let osd_item = CheckMenuItem::with_id(
         app,
         "toggle_osd",
         "Enable OSD Notification",
         true,
-        cfg.osd.enabled,
+        osd_any_enabled,
         None::<&str>,
-    )
-    .unwrap();
+    )?;
     let overlay_item = CheckMenuItem::with_id(
         app,
         "toggle_overlay",
         "Show Persistent Overlay",
         true,
-        cfg.persistent_overlay.enabled,
+        overlay_any_enabled,
         None::<&str>,
-    )
-    .unwrap();
+    )?;
     let boot_item = CheckMenuItem::with_id(
         app,
         "toggle_boot",
@@ -124,38 +443,35 @@ pub(crate) fn build_tray_menu<M: Manager<tauri::Wry>>(
         true,
         startup::get_run_on_startup(),
         None::<&str>,
-    )
-    .unwrap();
+    )?;
 
     let _ = menu.append_items(&[
         &sound_item,
         &osd_item,
         &overlay_item,
         &boot_item,
-        &PredefinedMenuItem::separator(app).unwrap(),
-        &MenuItem::with_id(app, "settings", "Settings", true, None::<&str>).unwrap(),
-        &MenuItem::with_id(app, "help", "Help", true, None::<&str>).unwrap(),
-        &PredefinedMenuItem::separator(app).unwrap(),
-        &MenuItem::with_id(app, "quit", "Exit", true, None::<&str>).unwrap(),
+        &PredefinedMenuItem::separator(app)?,
+        &MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?,
+        &MenuItem::with_id(app, "help", "Help", true, None::<&str>)?,
+        &PredefinedMenuItem::separator(app)?,
+        &MenuItem::with_id(app, "quit", "Exit", true, None::<&str>)?,
     ]);
 
-    menu
+    Ok(menu)
 }
 
-pub fn load_tray_icon(is_muted: bool, is_light: bool) -> Image<'static> {
+pub fn load_tray_icon(is_muted: bool, is_light: bool) -> Result<Image<'static>, tauri::Error> {
     let bytes: &[u8] = match (is_muted, is_light) {
         (true, true) => include_bytes!("../frontend/assets/mic_muted_black.ico"),
         (false, true) => include_bytes!("../frontend/assets/mic_black.ico"),
         (true, false) => include_bytes!("../frontend/assets/mic_muted_white.ico"),
         (false, false) => include_bytes!("../frontend/assets/mic_white.ico"),
     };
-    // SAFETY: include_bytes! is compile-time verified, so this should never fail.
-    // Using unwrap() here because a failure indicates a build/packaging issue.
-    Image::from_bytes(bytes).expect("included tray icon bytes should always be valid")
+    Image::from_bytes(bytes)
 }
 
 // ─────────────────────────────────────────
-//  Emit helper – fires state update to all windows
+//  Emit helper
 // ─────────────────────────────────────────
 pub fn emit_state(app: &AppHandle, is_muted: bool, peak: f32) {
     let _ = app.emit(
@@ -167,18 +483,167 @@ pub fn emit_state(app: &AppHandle, is_muted: bool, peak: f32) {
     );
 }
 
-fn init_audio(cfg: &config::AppConfig) -> audio::AudioController {
-    match audio::AudioController::new(cfg.device_id.as_ref())
-        .or_else(|e| {
-            tracing::error!(error = ?e, "Failed to initialize configured audio device, falling back to default");
-            audio::AudioController::new(None)
-        }) {
-        Ok(ctrl) => ctrl,
-        Err(e) => {
-            tracing::error!(error = ?e, "Failed to initialize any audio controller");
-            std::process::exit(1);
-        }
-    }
+fn spawn_audio_worker(
+    app: AppHandle,
+    state: Arc<AppState>,
+    rx: std_mpsc::Receiver<AudioMsg>,
+    initial_device_id: Option<String>,
+) {
+    std::thread::Builder::new()
+        .name("audio-worker".into())
+        .spawn(move || {
+            // Initialize COM for this thread (Multithreaded Apartment)
+            unsafe {
+                let _ = windows::Win32::System::Com::CoInitializeEx(
+                    None,
+                    windows::Win32::System::Com::COINIT_MULTITHREADED,
+                );
+            }
+
+            let mut controller = match audio::AudioController::new(initial_device_id.as_ref()) {
+                Ok(c) => Some(c),
+                Err(e) => {
+                    tracing::error!(
+                        error = ?e,
+                        "Failed to initialize audio controller, falling back to default"
+                    );
+                    audio::AudioController::new(None).ok()
+                }
+            };
+
+            if controller.is_none() {
+                tracing::error!("Failed to initialize audio controller and fallback failed. Audio features will be disabled.");
+            } else {
+                tracing::info!("Audio worker: controller initialized OK");
+            }
+
+            let mut _active_sink: Option<rodio::Sink> = None;
+            let mut last_peak_poll = std::time::Instant::now();
+            let mut current_muted = controller.as_ref().map(|c| c.is_muted().unwrap_or(false)).unwrap_or(false);
+            {
+                *state.is_muted.lock() = current_muted;
+            }
+
+            loop {
+                // Check for messages with a short timeout to allow for periodic peak polling
+                match rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                    Ok(msg) => match msg {
+                        AudioMsg::ToggleMute(cfg) => {
+                            tracing::info!("Audio worker: received ToggleMute");
+                            if let Some(ref mut c) = controller {
+                                match c.toggle_mute(&cfg) {
+                                    Ok(new_muted) => {
+                                        tracing::info!(muted = new_muted, "Audio worker: mute toggled");
+                                        current_muted = new_muted;
+                                        let peak = c.get_peak_value().unwrap_or(0.0);
+                                        finalize_mute_change(&app, &state, new_muted, peak, &cfg);
+                                        _active_sink = audio::play_feedback(
+                                            c.stream_handle().as_ref(),
+                                            new_muted,
+                                            &cfg,
+                                        );
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(error = ?e, "Audio worker: toggle_mute COM call failed");
+                                    }
+                                }
+                            } else {
+                                tracing::error!("Audio worker: ToggleMute received but controller is None");
+                            }
+                        }
+                        AudioMsg::SetMute(mute, cfg) => {
+                            if let Some(ref mut c) = controller {
+                                if c.set_mute(mute, &cfg).is_ok() {
+                                    current_muted = mute;
+                                    let peak = c.get_peak_value().unwrap_or(0.0);
+                                    finalize_mute_change(&app, &state, mute, peak, &cfg);
+                                    _active_sink =
+                                        audio::play_feedback(c.stream_handle().as_ref(), mute, &cfg);
+                                }
+                            }
+                        }
+                        AudioMsg::SetDevice(id) => {
+                            if let Ok(new_ctrl) = audio::AudioController::new(id.as_ref()) {
+                                controller = Some(new_ctrl);
+                                current_muted = controller.as_ref().map(|c| c.is_muted().unwrap_or(false)).unwrap_or(false);
+                                {
+                                    *state.is_muted.lock() = current_muted;
+                                }
+                                // Refresh devices list after switching
+                                if let Ok(devices) = audio::get_audio_devices() {
+                                    {
+                                        *state.available_devices.lock() = devices;
+                                    }
+                                }
+                            }
+                        }
+                        AudioMsg::PlayPreview(mode, key, mut cfg) => {
+                            if let Some(ref c) = controller {
+                                cfg.audio_mode = mode;
+                                _active_sink = audio::play_feedback(
+                                    c.stream_handle().as_ref(),
+                                    key == "mute",
+                                    &cfg,
+                                );
+                            }
+                        }
+                        AudioMsg::RefreshDevices => {
+                            if let Ok(devices) = audio::get_audio_devices() {
+                                *state.available_devices.lock() = devices;
+                            }
+                        }
+                    },
+                    Err(std_mpsc::RecvTimeoutError::Timeout) => {
+                        // Periodic peak level polling (~10Hz)
+                        if last_peak_poll.elapsed() >= std::time::Duration::from_millis(100) {
+                            if let Some(ref c) = controller {
+                                if let Ok(peak) = c.get_peak_value() {
+                                    state.peak_level.store(
+                                        (peak * 10000.0) as u32,
+                                        std::sync::atomic::Ordering::Relaxed,
+                                    );
+                                    // Emit state update periodically for VU meters
+                                    emit_state(&app, current_muted, peak);
+                                }
+                            }
+                            last_peak_poll = std::time::Instant::now();
+                        }
+                    }
+                    Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+        })
+        .expect("failed to spawn audio worker thread");
+}
+
+fn finalize_mute_change(
+    app: &AppHandle,
+    state: &Arc<AppState>,
+    muted: bool,
+    peak: f32,
+    cfg: &config::AppConfig,
+) {
+    tracing::info!(muted = muted, "finalize_mute_change: start");
+    *state.is_muted.lock() = muted;
+    state
+        .peak_level
+        .store((peak * 10000.0) as u32, std::sync::atomic::Ordering::Relaxed);
+
+    // Emit state event — thread-safe, updates overlay VU/icon via JS listener
+    emit_state(app, muted, peak);
+
+    // Dispatch tray + OSD updates to the main thread.
+    // Keep the callback lightweight — no window creation, only show/hide/emit.
+    let app_clone = app.clone();
+    let cfg_clone = cfg.clone();
+    let _ = app.run_on_main_thread(move || {
+        tracing::info!(muted = muted, "finalize_mute_change: on main thread");
+        update_tray_icon(&app_clone, muted);
+
+        let monitors = get_monitor_info(&app_clone);
+        trigger_osd(&app_clone, muted, &cfg_clone, &monitors);
+        tracing::info!("finalize_mute_change: done");
+    });
 }
 
 fn init_hotkeys(cfg: &config::AppConfig) -> hotkey::HotkeyManager {
@@ -212,20 +677,27 @@ fn init_hotkeys(cfg: &config::AppConfig) -> hotkey::HotkeyManager {
 
 fn spawn_hotkey_loop(app_handle: AppHandle, state: Arc<AppState>) {
     std::thread::spawn(move || {
-        // Wait for a few seconds to let WebView2 load its own hooks, making our hook LAST in the chain
+        // Direct file diagnostic — bypasses tracing to verify thread is alive
+        let diag_path = std::env::temp_dir().join("micmute_thread_diag.log");
+        let _ = std::fs::write(&diag_path, format!("hotkey thread started: {:?}\n", std::time::SystemTime::now()));
+
         std::thread::sleep(std::time::Duration::from_secs(2));
         {
             let hk = state.hotkeys.lock();
             hk.start_hook();
         }
 
-        // COM calls are dispatched to the main thread via run_on_main_thread(),
-        // so no COM initialization is needed here.
+        // Append after hook starts
+        if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&diag_path) {
+            use std::io::Write;
+            let _ = writeln!(f, "hook started, entering loop: {:?}", std::time::SystemTime::now());
+            let _ = f.flush();
+        }
+
         let mut topmost_counter: u32 = 0;
         let mut afk_counter: u32 = 0;
+        let mut hook_maint_counter: u32 = 0;
 
-        // Cache hotkey config as plain values to avoid cloning HashMap every iteration.
-        // These are refreshed from config periodically (every ~500ms).
         let extract_vk = |val: &serde_json::Value| -> u32 {
             val.get("vk").and_then(|v| v.as_u64()).unwrap_or(0) as u32
         };
@@ -246,19 +718,38 @@ fn spawn_hotkey_loop(app_handle: AppHandle, state: Arc<AppState>) {
         let mut cached_afk_enabled = st.afk.enabled;
         let mut cached_afk_timeout = st.afk.timeout;
         #[allow(unused_assignments)]
-        let mut cached_overlay_enabled = st.persistent_overlay.enabled;
+        let mut cached_overlay_enabled = st.persistent_overlay.values().any(|o| o.enabled);
         drop(st);
 
-        // AFK check interval (~1 second at 10ms polling)
         const AFK_CHECK_TICKS: u32 = 100;
+        const HOOK_MAINT_TICKS: u32 = 500; // Every 5 seconds
         let topmost_ticks =
             (constants::OVERLAY_TOPMOST_INTERVAL_MS / constants::HOTKEY_POLL_INTERVAL_MS) as u32;
+        let mut diag_counter: u32 = 0;
+        let diag_path = std::env::temp_dir().join("micmute_thread_diag.log");
 
         loop {
-            // ── Process hotkey events (no config lock needed) ──
+            // Periodic diagnostic heartbeat (every ~5s)
+            diag_counter += 1;
+            if diag_counter >= 500 {
+                diag_counter = 0;
+                tracing::debug!(
+                    toggle_vk = cached_toggle_vk,
+                    is_toggle = cached_is_toggle,
+                    "hotkey loop heartbeat"
+                );
+                if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&diag_path) {
+                    use std::io::Write;
+                    let _ = writeln!(f, "heartbeat: {:?}", std::time::SystemTime::now());
+                    let _ = f.flush();
+                }
+            }
+
+            // ── Process hotkey events ──
             {
                 let hk = state.hotkeys.lock();
                 while let Some(vk) = hk.try_recv() {
+                    tracing::info!(vk = vk, "Hotkey VK received from hook");
                     if cached_is_toggle {
                         if cached_toggle_vk == vk {
                             do_toggle_mute(&app_handle);
@@ -273,24 +764,13 @@ fn spawn_hotkey_loop(app_handle: AppHandle, state: Arc<AppState>) {
                 }
             }
 
-            // ── AFK Logic (check every ~1s, not every 10ms) ──
+            // ── AFK Logic ──
             afk_counter += 1;
             if afk_counter >= AFK_CHECK_TICKS {
                 afk_counter = 0;
                 if cached_afk_enabled {
-                    let mut lii = windows::Win32::UI::Input::KeyboardAndMouse::LASTINPUTINFO {
-                        cbSize: std::mem::size_of::<
-                            windows::Win32::UI::Input::KeyboardAndMouse::LASTINPUTINFO,
-                        >() as u32,
-                        dwTime: 0,
-                    };
-                    let _ = unsafe {
-                        windows::Win32::UI::Input::KeyboardAndMouse::GetLastInputInfo(&mut lii)
-                    };
-                    let tick = unsafe { windows::Win32::System::SystemInformation::GetTickCount() };
-                    let elapsed_ms = tick.saturating_sub(lii.dwTime);
-
-                    if elapsed_ms > (cached_afk_timeout * 1000) {
+                    let idle_s = crate::utils::get_idle_duration();
+                    if idle_s > (cached_afk_timeout as f32) {
                         let is_muted = *state.is_muted.lock();
                         if !is_muted {
                             do_set_mute(&app_handle, true);
@@ -299,17 +779,10 @@ fn spawn_hotkey_loop(app_handle: AppHandle, state: Arc<AppState>) {
                 }
             }
 
-            // ── Periodic maintenance (~every 500ms) ──
+            // ── Periodic maintenance ──
             topmost_counter += 1;
             if topmost_counter >= topmost_ticks {
                 topmost_counter = 0;
-
-                // Reinstall keyboard hook if Windows silently removed it
-                // (common during tray context menu modal loops)
-                {
-                    let hk = state.hotkeys.lock();
-                    hk.ensure_hook_active();
-                }
 
                 // Refresh cached config values
                 {
@@ -321,19 +794,36 @@ fn spawn_hotkey_loop(app_handle: AppHandle, state: Arc<AppState>) {
                     cached_unmute_vk = new_cache.3;
                     cached_afk_enabled = st.afk.enabled;
                     cached_afk_timeout = st.afk.timeout;
-                    cached_overlay_enabled = st.persistent_overlay.enabled;
+                    cached_overlay_enabled = st.persistent_overlay.values().any(|o| o.enabled);
                 }
 
-                if cached_overlay_enabled
-                    && let Some(win) = app_handle.get_webview_window("overlay")
-                        && let Ok(tauri_hwnd) = win.hwnd() {
-                            use windows::Win32::Foundation::HWND;
-                            let hwnd = HWND(tauri_hwnd.0);
-                            crate::utils::force_topmost(hwnd);
+                // Re-assert always-on-top for all active overlay windows.
+                // Dispatched to main thread to avoid blocking this loop with
+                // synchronous SendMessage calls from SetWindowPos.
+                if cached_overlay_enabled {
+                    let ah = app_handle.clone();
+                    let _ = app_handle.run_on_main_thread(move || {
+                        for (label, win) in ah.webview_windows() {
+                            if label == "overlay" || label.starts_with("overlay-") {
+                                if let Ok(tauri_hwnd) = win.hwnd() {
+                                    use windows::Win32::Foundation::HWND;
+                                    let hwnd = HWND(tauri_hwnd.0);
+                                    crate::utils::force_topmost(hwnd);
+                                }
+                            }
                         }
+                    });
+                }
             }
 
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            hook_maint_counter += 1;
+            if hook_maint_counter >= HOOK_MAINT_TICKS {
+                hook_maint_counter = 0;
+                let hk = state.hotkeys.lock();
+                hk.ensure_hook_active();
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(constants::HOTKEY_POLL_INTERVAL_MS));
         }
     });
 }
@@ -343,140 +833,172 @@ fn spawn_hotkey_loop(app_handle: AppHandle, state: Arc<AppState>) {
 // ─────────────────────────────────────────
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // ── Initialize logging ──
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .with_target(true)
-        .init();
+    std::panic::set_hook(Box::new(|info| {
+        let location = info.location().map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column())).unwrap_or_else(|| "unknown".to_string());
+        let payload = info.payload().downcast_ref::<&str>().map(|s| *s).or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str())).unwrap_or("no payload");
+        tracing::error!(panic = %payload, location = %location, "APPLICATION PANIC");
+        eprintln!("PANIC: {} at {}", payload, location);
+    }));
+
+    let log_path = {
+        let mut p = std::env::temp_dir();
+        p.push("micmute_debug.log");
+        p
+    };
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&log_path)
+        .ok();
+    if let Some(file) = log_file {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("debug")),
+            )
+            .with_target(true)
+            .with_writer(std::sync::Mutex::new(file))
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+            )
+            .with_target(true)
+            .init();
+    }
 
     tracing::info!("Starting MicMuteRs application");
 
-    // ── Pre-initialize state BEFORE Tauri builder to prevent IPC race conditions ──
     unsafe {
+        tracing::debug!("Setting process priority");
         let _ = windows::Win32::System::Threading::SetPriorityClass(
             windows::Win32::System::Threading::GetCurrentProcess(),
             windows::Win32::System::Threading::ABOVE_NORMAL_PRIORITY_CLASS,
         );
     }
 
+    tracing::debug!("Loading config");
     let cfg = config::AppConfig::load();
-    let audio_ctrl = init_audio(&cfg);
-
-    let is_muted = audio_ctrl.is_muted().unwrap_or(false);
-    let devices = audio::get_audio_devices().unwrap_or_default();
-
-    // ── Hotkeys ──
+    tracing::debug!("Getting audio devices");
+    // Run on a separate thread so COM (COINIT_MULTITHREADED) never contaminates
+    // the main thread's apartment — tao requires OleInitialize (STA) on the main thread.
+    let devices = std::thread::spawn(|| audio::get_audio_devices().unwrap_or_default())
+        .join()
+        .unwrap_or_default();
+    tracing::debug!("Initializing hotkeys");
     let hotkey_mgr = init_hotkeys(&cfg);
 
-    // ── Audio feedback worker thread (replaces per-toggle thread spawns) ──
-    let (audio_tx, audio_rx) = std_mpsc::sync_channel::<AudioFeedbackMsg>(1);
-    std::thread::Builder::new()
-        .name("audio-feedback".into())
-        .stack_size(256 * 1024) // 256KB is plenty for audio playback
-        .spawn(move || {
-            // Holds the currently-playing Sink. When a new message arrives,
-            // this gets replaced — dropping the old Sink stops its playback
-            // immediately, so rapid toggles never queue up.
-            let mut _active_sink: Option<rodio::Sink> = None;
-            for msg in audio_rx {
-                _active_sink = audio::play_feedback(&msg.stream_handle, msg.is_muted, &msg.config);
-            }
-        })
-        .expect("failed to spawn audio feedback worker");
+    tracing::debug!("Creating audio channel");
+    let (audio_tx, audio_rx) = std_mpsc::sync_channel::<AudioMsg>(10);
 
-    // ── Shared state ──
     let state = Arc::new(AppState {
-        audio: Mutex::new(audio_ctrl),
         config: Mutex::new(cfg.clone()),
         hotkeys: Mutex::new(hotkey_mgr),
-        is_muted: Mutex::new(is_muted),
+        is_muted: Mutex::new(false),
+        peak_level: std::sync::atomic::AtomicU32::new(0),
         available_devices: Mutex::new(devices.clone()),
-        audio_feedback_tx: audio_tx,
+        audio_tx,
+        tray: Mutex::new(None),
     });
 
+    tracing::info!("Building Tauri application");
     tauri::Builder::default()
         .manage(Arc::clone(&state))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
-        .on_window_event(|win, event| if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-            if win.label() == "settings" {
-                let _ = win.hide();
-                api.prevent_close();
+        .on_window_event(|win, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if win.label() == "settings" {
+                    let _ = win.hide();
+                    api.prevent_close();
+                }
             }
         })
-        .setup(move |app| {
-            // ── System tray ──
-            let is_light = theme::is_system_light_theme();
-            let tray_icon = load_tray_icon(is_muted, is_light);
-            let tray_menu = build_tray_menu(app, &cfg, &devices);
+        .setup({
+            let state = Arc::clone(&state);
+            let initial_device_id = cfg.device_id.clone();
+            move |app| {
+                tracing::info!("Tauri setup starting");
+                // ── Audio worker thread ──
+                spawn_audio_worker(app.handle().clone(), Arc::clone(&state), audio_rx, initial_device_id);
 
-            let _tray = TrayIconBuilder::with_id("main")
-                .icon(tray_icon)
-                .tooltip("MicMuteRs")
-                .menu(&tray_menu)
-                .on_menu_event({
+                // ── System tray ──
+                tracing::debug!("Initializing system tray");
+                let is_light = theme::is_system_light_theme();
+                let tray_icon = load_tray_icon(false, is_light).ok();
+                let tray_menu = build_tray_menu(app, &cfg, &devices).ok();
+
+                let mut tray_builder = TrayIconBuilder::with_id("main")
+                    .tooltip("MicMuteRs");
+
+                if let Some(icon) = tray_icon {
+                    tray_builder = tray_builder.icon(icon);
+                }
+                if let Some(menu) = tray_menu {
+                    tray_builder = tray_builder.menu(&menu);
+                }
+
+                let tray = tray_builder.build(app)?;
+
+                *state.tray.lock() = Some(tray);
+
+                // Register global event handlers on the App — builder-level callbacks
+                // are not reliably invoked in Tauri 2.10.x/tao 0.34.x on Windows.
+                {
                     let state2 = Arc::clone(&state);
-                    move |app, event| {
+                    app.on_menu_event(move |app, event| {
+                        tracing::info!(id = event.id().as_ref(), "Tray menu event fired");
                         handle_tray_event(app, event.id().as_ref(), &state2);
-                    }
-                })
-                .on_tray_icon_event(|tray, event| {
+                    });
+                }
+                app.on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click {
                         button: MouseButton::Left,
                         button_state: MouseButtonState::Up,
                         ..
                     } = event
                     {
+                        tracing::info!("Tray left-click: toggling mute");
                         let app = tray.app_handle();
                         do_toggle_mute(app);
                     }
-                })
-                .build(app)?;
+                });
 
-            // ── Overlay window ──
-            let overlay_win = app.get_webview_window("overlay").unwrap();
-            {
-                let cfg_guard = state.config.lock();
-                if cfg_guard.persistent_overlay.enabled {
-                    // Stored x/y are physical pixels (from outerPosition() in JS)
-                    let _ = overlay_win.set_position(tauri::PhysicalPosition::new(
-                        cfg_guard.persistent_overlay.x,
-                        cfg_guard.persistent_overlay.y,
-                    ));
-                    let scale = cfg_guard.persistent_overlay.scale as f64;
-                    let w = if cfg_guard.persistent_overlay.show_vu {
-                        scale + 30.0
-                    } else {
-                        scale
-                    };
-                    let _ = overlay_win.set_size(tauri::LogicalSize::new(w, scale));
-                    // Bootstrap transparency: Tauri's set_ignore_cursor_events(true)
-                    // triggers TAO to properly add WS_EX_LAYERED (required for WebView2
-                    // per-pixel alpha). We call it once, then use our safe
-                    // set_click_through() to set the actual desired click-through state
-                    // without ever rebuilding the full extended style.
-                    let _ = overlay_win.set_ignore_cursor_events(true);
-                    if !cfg_guard.persistent_overlay.locked
-                        && let Ok(tauri_hwnd) = overlay_win.hwnd() {
-                            use windows::Win32::Foundation::HWND;
-                            let hwnd = HWND(tauri_hwnd.0);
-                            crate::utils::set_click_through(hwnd, false);
+                // ── Hotkey listener thread ──
+                tracing::debug!("Spawning hotkey loop");
+                spawn_hotkey_loop(app.handle().clone(), Arc::clone(&state));
+
+                // ── Configure the static overlay window ──
+                // Only use the 3 static windows from tauri.conf.json (settings,
+                // overlay, osd). WebView2 dynamic window creation deadlocks the
+                // main thread regardless of which thread calls build().
+                {
+                    let overlay_cfg = cfg.persistent_overlay
+                        .get("primary")
+                        .cloned()
+                        .or_else(|| cfg.persistent_overlay.values().next().cloned())
+                        .unwrap_or_default();
+
+                    if let Some(win) = app.get_webview_window("overlay") {
+                        apply_overlay_config(&win, &overlay_cfg);
+                        if overlay_cfg.x != 0 || overlay_cfg.y != 0 {
+                            let _ = win.set_position(tauri::PhysicalPosition::new(
+                                overlay_cfg.x, overlay_cfg.y,
+                            ));
                         }
-                    let _ = overlay_win.show();
-                    // Explicitly re-assert always-on-top after show to ensure
-                    // Windows applies the TOPMOST z-order (the config flag alone
-                    // can be lost on system boot when other apps start later).
-                    let _ = overlay_win.set_always_on_top(true);
+                        if overlay_cfg.enabled {
+                            let _ = win.show();
+                        }
+                        tracing::info!("Static overlay window configured");
+                    }
                 }
+
+                tracing::info!("Tauri setup complete");
+                Ok(())
             }
-
-            // ── Hotkey listener thread ──
-            spawn_hotkey_loop(app.handle().clone(), Arc::clone(&state));
-
-            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_state,
@@ -498,139 +1020,68 @@ pub fn run() {
             commands::get_overlay_background_is_light,
             commands::save_overlay_position,
             commands::get_overlay_topmost_interval,
+            commands::get_monitors,
         ])
         .run(tauri::generate_context!())
         .expect("fatal error while running tauri application");
 }
+
 // ─────────────────────────────────────────
-//  Action helpers (called from tray + hotkey thread)
+//  Action helpers
 // ─────────────────────────────────────────
-/// Toggle mute, dispatching COM audio calls to the main thread (STA).
 pub fn do_toggle_mute(app: &AppHandle) {
-    let app_for_closure = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        let state: tauri::State<Arc<AppState>> = app_for_closure.state();
-        let cfg = state.config.lock().clone();
-
-        let (success_m, peak, stream_handle) = {
-            let audio = state.audio.lock();
-            if let Ok(m) = audio.toggle_mute(&cfg) {
-                let p = audio.get_peak_value().unwrap_or(0.0);
-                (Some(m), p, Some(audio.stream_handle()))
-            } else {
-                (None, 0.0, None)
-            }
-        };
-
-        if let Some(m) = success_m {
-            *state.is_muted.lock() = m;
-            update_tray_icon(&app_for_closure, m);
-            emit_state(&app_for_closure, m, peak);
-            trigger_osd(&app_for_closure, m);
-
-            if let Some(sh) = stream_handle {
-                let _ = state.audio_feedback_tx.try_send(AudioFeedbackMsg {
-                    stream_handle: sh,
-                    is_muted: m,
-                    config: cfg,
-                });
-            }
-        }
-    });
+    tracing::info!("do_toggle_mute called");
+    let state: tauri::State<Arc<AppState>> = app.state();
+    let cfg = state.config.lock().clone();
+    if let Err(e) = state.audio_tx.try_send(AudioMsg::ToggleMute(cfg)) {
+        tracing::error!(error = ?e, "do_toggle_mute: failed to send to audio worker");
+    }
 }
 
-/// Set mute to a specific value, dispatching COM audio calls to the main thread (STA).
 pub fn do_set_mute(app: &AppHandle, mute: bool) {
-    let app_for_closure = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        let state: tauri::State<Arc<AppState>> = app_for_closure.state();
-        let cfg = state.config.lock().clone();
-
-        let (success, peak, stream_handle) = {
-            let audio = state.audio.lock();
-            if audio.set_mute(mute, &cfg).is_ok() {
-                let p = audio.get_peak_value().unwrap_or(0.0);
-                (true, p, Some(audio.stream_handle()))
-            } else {
-                (false, 0.0, None)
-            }
-        };
-
-        if success {
-            *state.is_muted.lock() = mute;
-            update_tray_icon(&app_for_closure, mute);
-            emit_state(&app_for_closure, mute, peak);
-            trigger_osd(&app_for_closure, mute);
-
-            if let Some(sh) = stream_handle {
-                let _ = state.audio_feedback_tx.try_send(AudioFeedbackMsg {
-                    stream_handle: sh,
-                    is_muted: mute,
-                    config: cfg,
-                });
-            }
-        }
-    });
+    let state: tauri::State<Arc<AppState>> = app.state();
+    let cfg = state.config.lock().clone();
+    let _ = state.audio_tx.try_send(AudioMsg::SetMute(mute, cfg));
 }
 
 pub fn update_tray_icon(app: &AppHandle, is_muted: bool) {
     let is_light = theme::is_system_light_theme();
-    let icon = load_tray_icon(is_muted, is_light);
-    if let Some(tray) = app.tray_by_id("main") {
-        let _ = tray.set_icon(Some(icon));
+    if let Ok(icon) = load_tray_icon(is_muted, is_light) {
+        if let Some(tray) = app.tray_by_id("main") {
+            let _ = tray.set_icon(Some(icon));
+        }
     }
 }
 
-/// OSD hide scheduling via a single persistent timer thread.
-struct OsdTimer {
-    tx: std_mpsc::Sender<OsdHideMsg>,
-}
+// ─────────────────────────────────────────
+//  OSD trigger (multi-monitor)
+// ─────────────────────────────────────────
+pub fn trigger_osd(app: &AppHandle, is_muted: bool, cfg: &config::AppConfig, monitors: &[MonitorInfo]) {
+    for mon in monitors {
+        let key = &mon.label_key;
+        let osd_cfg = match cfg.osd.get(key) {
+            Some(c) if c.enabled => c,
+            _ => continue,
+        };
 
-struct OsdHideMsg {
-    win: tauri::WebviewWindow,
-    delay: std::time::Duration,
-    generation: u64,
-}
+        let label = osd_label(key);
+        let duration = osd_cfg.duration;
+        let size = osd_cfg.size;
+        let opacity = osd_cfg.opacity;
+        let position = osd_cfg.position.clone();
 
-static OSD_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        // Get the OSD window for this monitor.
+        // Windows are created ahead of time by sync_osd_windows.
+        let osd_win = app.get_webview_window(&label);
 
-impl OsdTimer {
-    fn new() -> Self {
-        let (tx, rx) = std_mpsc::channel::<OsdHideMsg>();
-        std::thread::Builder::new()
-            .name("osd-timer".into())
-            .spawn(move || {
-                for msg in rx {
-                    std::thread::sleep(msg.delay);
-                    if OSD_GENERATION.load(std::sync::atomic::Ordering::SeqCst) == msg.generation {
-                        let _ = msg.win.hide();
-                    }
-                }
-            })
-            .expect("failed to spawn OSD timer thread");
-        Self { tx }
-    }
-}
+        if let Some(osd_win) = osd_win {
+            let _ = osd_win.set_size(tauri::LogicalSize::new(size as f64, size as f64));
 
-static OSD_TIMER: std::sync::OnceLock<OsdTimer> = std::sync::OnceLock::new();
-
-pub fn trigger_osd(app: &AppHandle, is_muted: bool) {
-    let state: tauri::State<Arc<AppState>> = app.state();
-    let cfg = state.config.lock();
-    if !cfg.osd.enabled {
-        return;
-    }
-    let duration = cfg.osd.duration;
-    let size = cfg.osd.size;
-    let opacity = cfg.osd.opacity;
-    let position = cfg.osd.position.clone();
-    drop(cfg);
-
-    if let Some(osd_win) = app.get_webview_window("osd") {
-        let _ = osd_win.set_size(tauri::LogicalSize::new(size as f64, size as f64));
-        if let Ok(Some(monitor)) = osd_win.current_monitor() {
-            let mon_size = monitor.size();
-            let scale = monitor.scale_factor();
+            // Position on the designated monitor
+            let mon_pos = mon.position;
+            let mon_size = mon.size;
+            let scale = mon.scale_factor;
+            
             let mon_w = mon_size.width as f64 / scale;
             let mon_h = mon_size.height as f64 / scale;
             let w = size as f64;
@@ -642,24 +1093,28 @@ pub fn trigger_osd(app: &AppHandle, is_muted: bool) {
                 _ => (mon_h - h) / 2.0,
             };
             let _ = osd_win.set_position(tauri::PhysicalPosition::new(
-                (x * scale) as i32,
-                (y * scale) as i32,
+                mon_pos.x + (x * scale) as i32,
+                mon_pos.y + (y * scale) as i32,
             ));
-        }
-        let _ = osd_win.show();
-        let _ = osd_win.set_always_on_top(true);
-        let _ = osd_win.emit(
-            "osd-show",
-            serde_json::json!({ "is_muted": is_muted, "duration": duration, "opacity": opacity }),
-        );
 
-        let generation = OSD_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-        let timer = OSD_TIMER.get_or_init(OsdTimer::new);
-        let _ = timer.tx.send(OsdHideMsg {
-            win: osd_win.clone(),
-            delay: std::time::Duration::from_millis(duration as u64),
-            generation,
-        });
+            let _ = osd_win.show();
+            let _ = osd_win.set_always_on_top(true);
+            let _ = osd_win.emit(
+                "osd-show",
+                serde_json::json!({ "is_muted": is_muted, "duration": duration, "opacity": opacity }),
+            );
+
+            // Schedule hide via per-monitor timer.
+            // Create the timer outside the lock so we don't hold the mutex
+            // while spawning a thread.
+            if !get_osd_timers().lock().contains_key(&label) {
+                let new_timer = OsdTimer::new();
+                get_osd_timers().lock().entry(label.clone()).or_insert(new_timer);
+            }
+            if let Some(timer) = get_osd_timers().lock().get_mut(&label) {
+                timer.schedule_hide(osd_win, std::time::Duration::from_millis(duration as u64));
+            }
+        }
     }
 }
 
@@ -669,7 +1124,7 @@ pub fn trigger_osd(app: &AppHandle, is_muted: bool) {
 fn handle_tray_event(app: &AppHandle, id: &str, state: &Arc<AppState>) {
     match id {
         "quit" => {
-            std::process::exit(0);
+            app.exit(0);
         }
         "toggle_mute" => {
             do_toggle_mute(app);
@@ -678,54 +1133,68 @@ fn handle_tray_event(app: &AppHandle, id: &str, state: &Arc<AppState>) {
             let cfg = {
                 let mut cfg = state.config.lock();
                 cfg.beep_enabled = !cfg.beep_enabled;
-                if let Err(e) = cfg.save() {
-                    tracing::error!("{}", e);
-                }
                 cfg.clone()
             };
+            if let Err(e) = cfg.save() {
+                tracing::error!("{}", e);
+            }
             sync_tray_and_emit(app, state, &cfg);
         }
         "toggle_osd" => {
             let cfg = {
                 let mut cfg = state.config.lock();
-                cfg.osd.enabled = !cfg.osd.enabled;
-                if let Err(e) = cfg.save() {
-                    tracing::error!("{}", e);
+                let any_enabled = cfg.osd.values().any(|o| o.enabled);
+                for osd_cfg in cfg.osd.values_mut() {
+                    osd_cfg.enabled = !any_enabled;
                 }
                 cfg.clone()
             };
+            if let Err(e) = cfg.save() {
+                tracing::error!("{}", e);
+            }
+            // OSD windows are shown on-demand; no sync needed here
             sync_tray_and_emit(app, state, &cfg);
         }
         "toggle_overlay" => {
-            let (enabled, cfg) = {
+            let cfg = {
                 let mut cfg = state.config.lock();
-                cfg.persistent_overlay.enabled = !cfg.persistent_overlay.enabled;
-                if let Err(e) = cfg.save() {
-                    tracing::error!("{}", e);
+                let any_enabled = cfg.persistent_overlay.values().any(|o| o.enabled);
+                for overlay_cfg in cfg.persistent_overlay.values_mut() {
+                    overlay_cfg.enabled = !any_enabled;
                 }
-                (cfg.persistent_overlay.enabled, cfg.clone())
+                cfg.clone()
             };
+            if let Err(e) = cfg.save() {
+                tracing::error!("{}", e);
+            }
+            // Show/hide the static overlay window
             if let Some(win) = app.get_webview_window("overlay") {
-                if enabled {
+                let any_enabled = cfg.persistent_overlay.values().any(|o| o.enabled);
+                if any_enabled {
                     let _ = win.show();
-                    let _ = win.set_always_on_top(true);
                 } else {
                     let _ = win.hide();
                 }
             }
             sync_tray_and_emit(app, state, &cfg);
         }
+
         "toggle_boot" => {
             let current = startup::get_run_on_startup();
             startup::set_run_on_startup(!current);
-            // Rebuild tray to update the checkmark
             let cfg = state.config.lock().clone();
             sync_tray_and_emit(app, state, &cfg);
         }
         "settings" => {
+            tracing::info!("Settings menu item clicked");
             if let Some(win) = app.get_webview_window("settings") {
-                let _ = win.show();
+                tracing::info!("Showing settings window");
+                if let Err(e) = win.show() {
+                    tracing::error!(error = ?e, "Failed to show settings window");
+                }
                 let _ = win.set_focus();
+            } else {
+                tracing::error!("Settings window not found");
             }
         }
         "help" => {
@@ -741,26 +1210,24 @@ fn handle_tray_event(app: &AppHandle, id: &str, state: &Arc<AppState>) {
             let cfg = {
                 let mut cfg = state.config.lock();
                 cfg.device_id = new_device_id.clone();
-                if let Err(e) = cfg.save() {
-                    tracing::error!("{}", e);
-                }
                 cfg.clone()
             };
-            if let Ok(new_audio) = audio::AudioController::new(new_device_id.as_ref()) {
-                *state.audio.lock() = new_audio;
+            if let Err(e) = cfg.save() {
+                tracing::error!("{}", e);
             }
+            let _ = state.audio_tx.try_send(AudioMsg::SetDevice(new_device_id));
             sync_tray_and_emit(app, state, &cfg);
         }
         _ => {}
     }
 }
 
-/// Rebuild tray menu checkmarks and emit config-update to all frontend windows.
 fn sync_tray_and_emit(app: &AppHandle, state: &Arc<AppState>, cfg: &config::AppConfig) {
     if let Some(tray) = app.tray_by_id("main") {
         let devices = state.available_devices.lock().clone();
-        let menu = build_tray_menu(app, cfg, &devices);
-        let _ = tray.set_menu(Some(menu));
+        if let Ok(menu) = build_tray_menu(app, cfg, &devices) {
+            let _ = tray.set_menu(Some(menu));
+        }
     }
     let _ = app.emit("config-update", serde_json::json!({ "config": cfg }));
 }

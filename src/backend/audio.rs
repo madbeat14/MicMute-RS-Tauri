@@ -60,18 +60,19 @@ pub struct AudioController {
     /// Audio client must be kept alive to maintain hardware streaming
     /// for peak meter readings.
     _audio_client: Option<IAudioClient>,
-    _stream: OutputStream,
-    stream_handle: OutputStreamHandle,
+    _stream: Option<OutputStream>,
+    stream_handle: Option<OutputStreamHandle>,
 }
 
 impl AudioController {
     pub fn new(device_id: Option<&String>) -> Result<Self> {
-        let (_stream, stream_handle) = OutputStream::try_default().map_err(|e| {
-            windows::core::Error::new(
-                windows::Win32::Foundation::E_FAIL,
-                format!("Failed to initialize audio output: {}", e),
-            )
-        })?;
+        let (opt_stream, opt_handle) = match OutputStream::try_default() {
+            Ok((_stream, stream_handle)) => (Some(_stream), Some(stream_handle)),
+            Err(e) => {
+                tracing::warn!(error = %e, "Audio output unavailable; beep/WAV feedback disabled");
+                (None, None)
+            }
+        };
 
         unsafe {
             // Ensure COM is initialized for the thread
@@ -123,8 +124,8 @@ impl AudioController {
                 volume,
                 meter,
                 _audio_client: audio_client,
-                _stream,
-                stream_handle,
+                _stream: opt_stream,
+                stream_handle: opt_handle,
             })
         }
     }
@@ -225,7 +226,7 @@ impl AudioController {
         Ok(peak)
     }
 
-    pub fn stream_handle(&self) -> OutputStreamHandle {
+    pub fn stream_handle(&self) -> Option<OutputStreamHandle> {
         self.stream_handle.clone()
     }
 }
@@ -241,13 +242,14 @@ fn is_safe_sound_path(path: &str) -> bool {
 /// When the returned Sink is dropped, playback stops immediately — this lets
 /// the worker thread cancel a previous sound by simply replacing it.
 pub fn play_feedback(
-    stream_handle: &OutputStreamHandle,
+    stream_handle: Option<&OutputStreamHandle>,
     is_muted: bool,
     config: &AppConfig,
 ) -> Option<Sink> {
     if !config.beep_enabled {
         return None;
     }
+    let stream_handle = stream_handle?;
 
     let key = if is_muted { "mute" } else { "unmute" };
 

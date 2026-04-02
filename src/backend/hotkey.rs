@@ -190,8 +190,14 @@ fn install_hook() {
         if old != 0 {
             let _ = UnhookWindowsHookEx(HHOOK(old as *mut _));
         }
-        if let Ok(hook) = SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_callback), None, 0) {
-            HOOK_HANDLE.store(hook.0 as isize, Ordering::SeqCst);
+        match SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_callback), None, 0) {
+            Ok(hook) => {
+                HOOK_HANDLE.store(hook.0 as isize, Ordering::SeqCst);
+                tracing::debug!("Low-level keyboard hook installed");
+            }
+            Err(e) => {
+                tracing::error!(error = ?e, "Failed to install low-level keyboard hook");
+            }
         }
     }
 }
@@ -252,6 +258,7 @@ fn sync_registered_hotkeys() {
             );
         }
         // Register current targets
+        let mut registered_count = 0;
         for (i, target_atomic) in TARGET_VKS.iter().enumerate() {
             let vk = target_atomic.load(Ordering::SeqCst);
             if vk != 0 {
@@ -263,8 +270,11 @@ fn sync_registered_hotkeys() {
                 );
                 if let Err(e) = result {
                     tracing::debug!(vk = vk, error = ?e, "RegisterHotKey failed (key may be reserved by another app)");
+                } else {
+                    registered_count += 1;
                 }
             }
         }
+        tracing::debug!(count = registered_count, "Backup hotkeys synced");
     }
 }

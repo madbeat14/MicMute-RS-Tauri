@@ -137,19 +137,6 @@ function updateVU(peak) {
 }
 
 /**
- * Starts an interval timer to constantly poll the backend for the current peak volume
- */
-function startVuPoll() {
-    if (window.vuPollTimer) clearInterval(window.vuPollTimer);
-    window.vuPollTimer = setInterval(async () => {
-        try {
-            const s = await window.__TAURI__.core.invoke("get_state");
-            updateVU(s.peak_level);
-        } catch (_) { }
-    }, 100);
-}
-
-/**
  * Updates the text and style of the mute status badge and toggle button.
  */
 function updateMuteUI(muted) {

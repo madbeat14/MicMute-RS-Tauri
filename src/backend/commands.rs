@@ -6,41 +6,30 @@
 
 use serde::Serialize;
 use std::sync::Arc;
-use tauri::State;
+use tauri::{Manager, State};
+use tauri_plugin_dialog::DialogExt;
 
-use crate::{AppState, audio, config, startup};
+use crate::{AppState, AudioMsg, config, startup};
 
-// ─────────────────────────────────────────
-//  Response types
-// ─────────────────────────────────────────
-#[derive(Serialize, Clone)]
+/// Response structure for application state (mute + peak level).
+#[derive(Serialize)]
 pub struct AppStateDto {
     pub is_muted: bool,
     pub peak_level: f32,
 }
 
-#[derive(Serialize, Clone)]
+/// Response structure for audio device list.
+#[derive(Serialize)]
 pub struct DeviceDto {
     pub id: String,
     pub name: String,
 }
 
-// ─────────────────────────────────────────
-//  Commands
-// ─────────────────────────────────────────
-
 /// Get current mute state and VU peak level.
 #[tauri::command]
 pub async fn get_state(state: State<'_, Arc<AppState>>) -> Result<AppStateDto, String> {
     let is_muted = *state.is_muted.lock();
-    let peak = state.audio.lock().get_peak_value().unwrap_or(0.0);
-    if peak > 0.0001 {
-        tracing::debug!(
-            peak_level = peak,
-            is_muted = is_muted,
-            "get_state called with significant peak level"
-        );
-    }
+    let peak = state.peak_level.load(std::sync::atomic::Ordering::Relaxed) as f32 / 10000.0;
     Ok(AppStateDto {
         is_muted,
         peak_level: peak,
@@ -50,30 +39,17 @@ pub async fn get_state(state: State<'_, Arc<AppState>>) -> Result<AppStateDto, S
 /// Toggle mic mute, return new state.
 #[tauri::command]
 pub async fn toggle_mute(
-    app: tauri::AppHandle,
+    _app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
 ) -> Result<AppStateDto, String> {
     let cfg = state.config.lock().clone();
-    let (muted, peak, stream_handle) = {
-        let audio = state.audio.lock();
-        let m = audio.toggle_mute(&cfg).map_err(|e| e.to_string())?;
-        let p = audio.get_peak_value().unwrap_or(0.0);
-        let sh = audio.stream_handle();
-        (m, p, sh)
-    };
-    *state.is_muted.lock() = muted;
-    crate::update_tray_icon(&app, muted);
-    crate::emit_state(&app, muted, peak);
-    crate::trigger_osd(&app, muted);
+    let _ = state.audio_tx.try_send(AudioMsg::ToggleMute(cfg));
 
-    let _ = state.audio_feedback_tx.try_send(crate::AudioFeedbackMsg {
-        stream_handle,
-        is_muted: muted,
-        config: cfg,
-    });
-
+    // Return the current state (it will be updated asynchronously)
+    let is_muted = *state.is_muted.lock();
+    let peak = state.peak_level.load(std::sync::atomic::Ordering::Relaxed) as f32 / 10000.0;
     Ok(AppStateDto {
-        is_muted: muted,
+        is_muted,
         peak_level: peak,
     })
 }
@@ -81,37 +57,18 @@ pub async fn toggle_mute(
 /// Explicitly set mute state.
 #[tauri::command]
 pub async fn set_mute(
-    app: tauri::AppHandle,
+    _app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
     muted: bool,
 ) -> Result<AppStateDto, String> {
     let cfg = state.config.lock().clone();
-    let (peak, stream_handle) = {
-        let audio = state.audio.lock();
-        audio
-            .set_mute(muted, &cfg)
-            .map_err(|e| format!("Failed to set mute: {}", e))?;
-        let p = audio.get_peak_value().unwrap_or(0.0);
-        (p, audio.stream_handle())
-    };
+    let _ = state.audio_tx.try_send(AudioMsg::SetMute(muted, cfg));
 
-    {
-        *state.is_muted.lock() = muted;
-        crate::update_tray_icon(&app, muted);
-        crate::emit_state(&app, muted, peak);
-        crate::trigger_osd(&app, muted);
-
-        let _ = state.audio_feedback_tx.try_send(crate::AudioFeedbackMsg {
-            stream_handle,
-            is_muted: muted,
-            config: cfg,
-        });
-
-        Ok(AppStateDto {
-            is_muted: muted,
-            peak_level: peak,
-        })
-    }
+    let peak = state.peak_level.load(std::sync::atomic::Ordering::Relaxed) as f32 / 10000.0;
+    Ok(AppStateDto {
+        is_muted: muted,
+        peak_level: peak,
+    })
 }
 
 /// Get full config.
@@ -120,22 +77,13 @@ pub async fn get_config(state: State<'_, Arc<AppState>>) -> Result<config::AppCo
     Ok(state.config.lock().clone())
 }
 
-/// Save updated config, re-apply hotkeys.
+/// Save updated config, re-apply hotkeys, and sync overlay/OSD windows.
 #[tauri::command]
 pub async fn update_config(
     app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
     payload: String,
 ) -> Result<(), String> {
-    tracing::debug!(payload_len = payload.len(), "update_config called");
-    const MAX_CONFIG_SIZE: usize = 64 * 1024;
-    if payload.len() > MAX_CONFIG_SIZE {
-        return Err(format!(
-            "Config payload too large: {} bytes (max {})",
-            payload.len(),
-            MAX_CONFIG_SIZE
-        ));
-    }
     let mut new_config: config::AppConfig = match serde_json::from_str(&payload) {
         Ok(cfg) => {
             tracing::debug!("Config deserialization successful");
@@ -146,21 +94,23 @@ pub async fn update_config(
             return Err(format!("Config deserialization failed: {}", e));
         }
     };
-    // Single lock: read old config, compute overlay changes, swap in new config
-    let old_config = {
-        let mut cfg = state.config.lock();
-        // Preserve overlay position from dragging (saved via save_overlay_position)
-        new_config.persistent_overlay.x = cfg.persistent_overlay.x;
-        new_config.persistent_overlay.y = cfg.persistent_overlay.y;
-        let old = cfg.clone();
-        *cfg = new_config.clone();
-        if let Err(e) = cfg.save() {
-            tracing::error!("{}", e);
-        }
-        old
-    };
 
-    // Update hotkeys (separate lock, no config dependency)
+    // Preserve per-monitor overlay positions
+    {
+        let mut cfg = state.config.lock();
+        for (key, existing) in cfg.persistent_overlay.iter() {
+            if let Some(new_overlay) = new_config.persistent_overlay.get_mut(key) {
+                new_overlay.x = existing.x;
+                new_overlay.y = existing.y;
+            }
+        }
+        *cfg = new_config.clone();
+    }
+    if let Err(e) = new_config.save() {
+        tracing::error!("{}", e);
+    }
+
+    // Update hotkeys
     let get_vk = |val: &serde_json::Value| -> u32 {
         val.get("vk").and_then(|v| v.as_u64()).unwrap_or(0) as u32
     };
@@ -169,22 +119,16 @@ pub async fn update_config(
     if mode == "toggle" {
         if let Some(h) = new_config.hotkey.get("toggle") {
             let v = get_vk(h);
-            if v != 0 {
-                vks.push(v);
-            }
+            if v != 0 { vks.push(v); }
         }
     } else {
         if let Some(h) = new_config.hotkey.get("mute") {
             let v = get_vk(h);
-            if v != 0 {
-                vks.push(v);
-            }
+            if v != 0 { vks.push(v); }
         }
         if let Some(h) = new_config.hotkey.get("unmute") {
             let v = get_vk(h);
-            if v != 0 {
-                vks.push(v);
-            }
+            if v != 0 { vks.push(v); }
         }
     }
     {
@@ -192,70 +136,23 @@ pub async fn update_config(
         hotkeys.set_hotkeys(vks);
     }
 
-    // UPDATE TRAY MENU Checkmarks
-    use tauri::Manager;
+    // Sync windows — called directly from the async command thread.
+    // WebviewWindowBuilder::build() internally dispatches to the event loop,
+    // which works from a background thread but deadlocks inside run_on_main_thread.
+    let monitors = crate::get_monitor_info(&app);
+
+    // Rebuild tray menu checkmarks
     if let Some(tray) = app.tray_by_id("main") {
         let devices = state.available_devices.lock().clone();
-        let menu = crate::build_tray_menu(&app, &new_config, &devices);
-        let _ = tray.set_menu(Some(menu));
-    }
-
-    // UPDATE OVERLAY WINDOW position, scale, visibility
-    if let Some(win) = app.get_webview_window("overlay") {
-        if new_config.persistent_overlay.enabled {
-            let scale = new_config.persistent_overlay.scale as f64;
-            let w = if new_config.persistent_overlay.show_vu {
-                scale + 30.0
-            } else {
-                scale
-            };
-            let _ = win.set_size(tauri::LogicalSize::new(w, scale));
-
-            // When locking position, preserve the current window position instead of
-            // resetting to config values. The position should only change when explicitly
-            // set by the user or when position_mode changes.
-            let just_locking =
-                new_config.persistent_overlay.locked && !old_config.persistent_overlay.locked;
-            let position_mode_changed = new_config.persistent_overlay.position_mode
-                != old_config.persistent_overlay.position_mode;
-
-            if just_locking {
-                // When just locking, get the current window position and save it to config
-                // This ensures the position where the user dragged the overlay is preserved
-                if let Ok(current_pos) = win.outer_position() {
-                    let mut cfg = state.config.lock();
-                    cfg.persistent_overlay.x = current_pos.x;
-                    cfg.persistent_overlay.y = current_pos.y;
-                    if let Err(e) = cfg.save() {
-                        tracing::error!("{}", e);
-                    }
-                }
-            } else if position_mode_changed {
-                // Stored x/y are physical pixels (from outerPosition() in JS)
-                let _ = win.set_position(tauri::PhysicalPosition::new(
-                    new_config.persistent_overlay.x,
-                    new_config.persistent_overlay.y,
-                ));
-            }
-
-            // Bootstrap WS_EX_LAYERED via Tauri (TAO sets it up correctly for
-            // WebView2 transparency), then use set_click_through to safely toggle
-            // only WS_EX_TRANSPARENT without ever removing WS_EX_LAYERED.
-            let _ = win.set_ignore_cursor_events(true);
-            if !new_config.persistent_overlay.locked
-                && let Ok(tauri_hwnd) = win.hwnd() {
-                    use windows::Win32::Foundation::HWND;
-                    let hwnd = HWND(tauri_hwnd.0);
-                    crate::utils::set_click_through(hwnd, false);
-                }
-            let _ = win.show();
-            let _ = win.set_always_on_top(true);
-        } else {
-            let _ = win.hide();
+        if let Ok(menu) = crate::build_tray_menu(&app, &new_config, &devices) {
+            let _ = tray.set_menu(Some(menu));
         }
     }
 
-    // EMIT CONFIG UPDATE EVENT so all frontend windows sync up
+    crate::sync_overlay_windows(&app, &new_config, &monitors);
+    crate::sync_osd_windows(&app, &new_config, &monitors);
+
+    // Emit config update to all frontend windows
     use tauri::Emitter;
     let _ = app.emit(
         "config-update",
@@ -267,10 +164,12 @@ pub async fn update_config(
     Ok(())
 }
 
-/// Return cached audio devices from application state (no COM enumeration).
-/// This is used for initial UI load to avoid COM threading issues.
+/// Enumerate audio capture devices.
 #[tauri::command]
-pub async fn get_cached_devices(state: State<'_, Arc<AppState>>) -> Result<Vec<DeviceDto>, String> {
+pub async fn get_devices(state: State<'_, Arc<AppState>>) -> Result<Vec<DeviceDto>, String> {
+    let _ = state.audio_tx.try_send(AudioMsg::RefreshDevices);
+    // Give it a tiny moment to refresh
+    std::thread::sleep(std::time::Duration::from_millis(50));
     let devs = state.available_devices.lock().clone();
     Ok(devs
         .into_iter()
@@ -278,17 +177,10 @@ pub async fn get_cached_devices(state: State<'_, Arc<AppState>>) -> Result<Vec<D
         .collect())
 }
 
-/// Enumerate audio capture devices (fresh COM enumeration).
-/// Used by "Refresh" button. Falls back to cached devices if enumeration fails.
+/// Get the current cached device list.
 #[tauri::command]
-pub async fn get_devices(state: State<'_, Arc<AppState>>) -> Result<Vec<DeviceDto>, String> {
-    let devs = match audio::get_audio_devices() {
-        Ok(d) if !d.is_empty() => {
-            *state.available_devices.lock() = d.clone();
-            d
-        }
-        Ok(_) | Err(_) => state.available_devices.lock().clone(),
-    };
+pub async fn get_cached_devices(state: State<'_, Arc<AppState>>) -> Result<Vec<DeviceDto>, String> {
+    let devs = state.available_devices.lock().clone();
     Ok(devs
         .into_iter()
         .map(|(id, name)| DeviceDto { id, name })
@@ -301,8 +193,7 @@ pub async fn set_device(
     state: State<'_, Arc<AppState>>,
     device_id: Option<String>,
 ) -> Result<(), String> {
-    let new_audio = audio::AudioController::new(device_id.as_ref()).map_err(|e| e.to_string())?;
-    *state.audio.lock() = new_audio;
+    let _ = state.audio_tx.try_send(AudioMsg::SetDevice(device_id.clone()));
     let mut cfg = state.config.lock();
     cfg.device_id = device_id;
     if let Err(e) = cfg.save() {
@@ -311,57 +202,43 @@ pub async fn set_device(
     Ok(())
 }
 
-/// Begin hotkey recording mode.
+/// Start listening for a single keypress to record as a hotkey.
 #[tauri::command]
 pub async fn start_recording_hotkey(state: State<'_, Arc<AppState>>) -> Result<(), String> {
-    state.hotkeys.lock().start_recording();
+    let hotkeys = state.hotkeys.lock();
+    hotkeys.start_recording();
     Ok(())
 }
 
-/// Cancel hotkey recording mode without applying a key.
+/// Stop listening for hotkey recording.
 #[tauri::command]
 pub async fn stop_recording_hotkey(state: State<'_, Arc<AppState>>) -> Result<(), String> {
-    state.hotkeys.lock().stop_recording();
+    let hotkeys = state.hotkeys.lock();
+    hotkeys.stop_recording();
     Ok(())
 }
 
-/// Poll for a recorded hotkey VK code (returns None if not yet recorded).
+/// Check if a key has been recorded. Returns the VK code or 0.
 #[tauri::command]
-pub async fn get_recorded_hotkey(state: State<'_, Arc<AppState>>) -> Result<Option<u32>, String> {
-    Ok(state.hotkeys.lock().try_recv_record())
+pub async fn get_recorded_hotkey(state: State<'_, Arc<AppState>>) -> Result<u32, String> {
+    let hotkeys = state.hotkeys.lock();
+    Ok(hotkeys.try_recv_record().unwrap_or(0))
 }
 
-/// Enable or disable run on startup.
+/// Enable or disable "run on startup" via Windows Task Scheduler.
 #[tauri::command]
-pub async fn set_run_on_startup_cmd(enable: bool) -> Result<(), String> {
-    startup::set_run_on_startup(enable);
+pub async fn set_run_on_startup_cmd(enabled: bool) -> Result<(), String> {
+    startup::set_run_on_startup(enabled);
     Ok(())
 }
 
-/// Check whether run-on-startup is enabled.
+/// Get current "run on startup" status.
 #[tauri::command]
 pub async fn get_run_on_startup_cmd() -> Result<bool, String> {
     Ok(startup::get_run_on_startup())
 }
 
-/// Open a file dialog to pick a WAV/MP3 file.
-#[tauri::command]
-pub async fn pick_audio_file(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    use tauri_plugin_dialog::DialogExt;
-    let (tx, rx) = std::sync::mpsc::channel();
-
-    app.dialog()
-        .file()
-        .add_filter("Audio", &["wav", "mp3"])
-        .pick_file(move |file_path| {
-            let path = file_path.map(|p| p.to_string());
-            let _ = tx.send(path);
-        });
-
-    rx.recv().map_err(|e| e.to_string())
-}
-
-/// Preview a sound based on current UI state (not yet saved to disk).
+/// Preview a sound based on current UI state.
 #[tauri::command]
 pub async fn preview_audio_feedback(
     state: State<'_, Arc<AppState>>,
@@ -371,31 +248,16 @@ pub async fn preview_audio_feedback(
 ) -> Result<(), String> {
     const MAX_CONFIG_SIZE: usize = 64 * 1024;
     if payload.len() > MAX_CONFIG_SIZE {
-        return Err(format!(
-            "Preview payload too large: {} bytes (max {})",
-            payload.len(),
-            MAX_CONFIG_SIZE
-        ));
+        return Err("Payload too large".into());
     }
     let temp_config: config::AppConfig =
         serde_json::from_str(&payload).map_err(|e| e.to_string())?;
-    let stream_handle = state.audio.lock().stream_handle();
 
-    // Force mode for preview
-    let mut preview_cfg = temp_config;
-    preview_cfg.audio_mode = mode;
-
-    let _ = state.audio_feedback_tx.try_send(crate::AudioFeedbackMsg {
-        stream_handle,
-        is_muted: key == "mute",
-        config: preview_cfg,
-    });
-
+    let _ = state.audio_tx.try_send(AudioMsg::PlayPreview(mode, key, temp_config));
     Ok(())
 }
 
-/// Open a URL in the default browser.
-/// Only allows http/https schemes to prevent arbitrary command execution.
+/// Open a URL in the default browser. Only http/https URLs are allowed.
 #[tauri::command]
 pub async fn open_url(url: String) -> Result<(), String> {
     if !url.starts_with("https://") && !url.starts_with("http://") {
@@ -404,45 +266,76 @@ pub async fn open_url(url: String) -> Result<(), String> {
     open::that(&url).map_err(|e| e.to_string())
 }
 
-/// Check if the background behind the overlay window is light or dark.
-/// This is used for auto theme detection on the overlay icon.
+/// Triggers a file picker via Tauri's dialog plugin.
 #[tauri::command]
-pub async fn get_overlay_background_is_light(app: tauri::AppHandle) -> Result<bool, String> {
-    use tauri::Manager;
+pub async fn pick_audio_file(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let file_path = app.dialog()
+        .file()
+        .add_filter("Audio Files", &["wav", "mp3", "ogg"])
+        .blocking_pick_file();
+    
+    Ok(file_path.map(|p| p.to_string()))
+}
+
+/// Check if the background behind a specific overlay window is light or dark.
+/// `monitor_key` identifies which overlay window to sample (e.g., "primary", "__DISPLAY1").
+#[tauri::command]
+pub async fn get_overlay_background_is_light(
+    app: tauri::AppHandle,
+    monitor_key: Option<String>,
+) -> Result<bool, String> {
     use windows::Win32::Foundation::HWND;
 
-    if let Some(overlay_win) = app.get_webview_window("overlay") {
-        let tauri_hwnd = overlay_win.hwnd().map_err(|e| e.to_string())?;
-        // Convert tauri's HWND (windows 0.61) to our HWND (windows 0.58)
-        // Both are transparent wrappers around *mut c_void
+    let label = match monitor_key {
+        Some(ref key) if key != "primary" => format!("overlay-{}", crate::sanitize_label(key)),
+        _ => "overlay".to_string(),
+    };
+
+    if let Some(overlay_win) = app.get_webview_window(&label) {
+        let tauri_hwnd = overlay_win.hwnd().map_err(|e: tauri::Error| e.to_string())?;
         let hwnd = HWND(tauri_hwnd.0);
         Ok(crate::theme::is_background_light(hwnd))
     } else {
-        // Fallback to system theme if overlay window not found
         Ok(crate::theme::is_system_light_theme())
     }
 }
 
 /// Return the overlay always-on-top re-assertion interval in milliseconds.
-/// Used by the frontend to match the backend's polling frequency.
 #[tauri::command]
 pub fn get_overlay_topmost_interval() -> u64 {
     crate::constants::OVERLAY_TOPMOST_INTERVAL_MS
 }
 
-/// Save the current overlay position to config without triggering a full config update.
-/// This is called when the user finishes dragging the overlay window.
+/// Save the current overlay window position to config without a full config update.
+/// Called when the user finishes dragging a specific overlay window.
 #[tauri::command]
 pub async fn save_overlay_position(
     state: State<'_, Arc<AppState>>,
+    monitor_key: String,
     x: i32,
     y: i32,
 ) -> Result<(), String> {
-    let mut cfg = state.config.lock();
-    cfg.persistent_overlay.x = x;
-    cfg.persistent_overlay.y = y;
-    if let Err(e) = cfg.save() {
+    let cfg_to_save = {
+        let mut cfg = state.config.lock();
+        if let Some(overlay_cfg) = cfg.persistent_overlay.get_mut(&monitor_key) {
+            overlay_cfg.x = x;
+            overlay_cfg.y = y;
+        } else {
+            tracing::warn!(monitor_key = %monitor_key, "save_overlay_position: unknown monitor key");
+            return Ok(());
+        }
+        cfg.clone()
+    };
+    if let Err(e) = cfg_to_save.save() {
         tracing::error!("{}", e);
     }
     Ok(())
+}
+
+/// Return all connected monitors with their geometry and a sanitized label key.
+/// The primary monitor is always returned with label_key "primary" to match
+/// the special config key.
+#[tauri::command]
+pub async fn get_monitors(app: tauri::AppHandle) -> Result<Vec<crate::MonitorInfo>, String> {
+    Ok(crate::get_monitor_info(&app))
 }

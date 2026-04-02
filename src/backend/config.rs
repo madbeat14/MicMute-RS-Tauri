@@ -1,6 +1,7 @@
 use crate::constants;
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -56,32 +57,6 @@ impl Default for SoundConfig {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
-pub struct AppConfig {
-    pub device_id: Option<String>,
-    pub sync_ids: Vec<String>,
-    pub beep_enabled: bool,
-    pub audio_mode: String, // "beep" or "custom"
-
-    #[serde(rename = "beep_config")]
-    pub beep_mode_configs: std::collections::HashMap<String, BeepConfig>,
-    #[serde(rename = "sound_config")]
-    pub sound_mode_configs: std::collections::HashMap<String, SoundConfig>,
-
-    pub hotkey: std::collections::HashMap<String, serde_json::Value>,
-    pub hotkey_mode: String, // "toggle" or "separate"
-
-    pub afk: AfkConfig,
-
-    pub persistent_overlay: OverlayConfig,
-    pub osd: OsdConfig,
-}
-
-fn default_hotkey_mode() -> String {
-    "toggle".to_string()
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
 pub struct OverlayConfig {
     pub enabled: bool,
     pub show_vu: bool,
@@ -99,7 +74,7 @@ pub struct OverlayConfig {
 impl Default for OverlayConfig {
     fn default() -> Self {
         OverlayConfig {
-            enabled: false,
+            enabled: true,
             show_vu: false,
             opacity: 80,
             x: 100,
@@ -127,7 +102,7 @@ pub struct OsdConfig {
 impl Default for OsdConfig {
     fn default() -> Self {
         OsdConfig {
-            enabled: false,
+            enabled: true,
             duration: 1500,
             position: "Bottom".to_string(),
             size: 150,
@@ -136,9 +111,35 @@ impl Default for OsdConfig {
     }
 }
 
+/// Per-monitor overlay and OSD configurations keyed by sanitized monitor label.
+/// The special key `"primary"` is used for the primary monitor as a default/fallback.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default)]
+pub struct AppConfig {
+    pub device_id: Option<String>,
+    pub sync_ids: Vec<String>,
+    pub beep_enabled: bool,
+    pub audio_mode: String, // "beep" or "custom"
+
+    #[serde(rename = "beep_config")]
+    pub beep_mode_configs: HashMap<String, BeepConfig>,
+    #[serde(rename = "sound_config")]
+    pub sound_mode_configs: HashMap<String, SoundConfig>,
+
+    pub hotkey: HashMap<String, serde_json::Value>,
+    pub hotkey_mode: String, // "toggle" or "separate"
+
+    pub afk: AfkConfig,
+
+    /// Keyed by sanitized monitor label (e.g., "primary", "__DISPLAY1").
+    pub persistent_overlay: HashMap<String, OverlayConfig>,
+    /// Keyed by sanitized monitor label.
+    pub osd: HashMap<String, OsdConfig>,
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
-        let mut beep_mode_configs = std::collections::HashMap::new();
+        let mut beep_mode_configs = HashMap::new();
         beep_mode_configs.insert(
             "mute".to_string(),
             BeepConfig {
@@ -156,7 +157,7 @@ impl Default for AppConfig {
             },
         );
 
-        let mut sound_mode_configs = std::collections::HashMap::new();
+        let mut sound_mode_configs = HashMap::new();
         sound_mode_configs.insert(
             "mute".to_string(),
             SoundConfig {
@@ -172,7 +173,7 @@ impl Default for AppConfig {
             },
         );
 
-        let mut hotkey = std::collections::HashMap::new();
+        let mut hotkey = HashMap::new();
         hotkey.insert(
             "toggle".to_string(),
             serde_json::json!({ "vk": 0xB3, "name": "Media Play/Pause" }),
@@ -186,6 +187,12 @@ impl Default for AppConfig {
             serde_json::json!({ "vk": 0, "name": "None" }),
         );
 
+        let mut persistent_overlay = HashMap::new();
+        persistent_overlay.insert("primary".to_string(), OverlayConfig::default());
+
+        let mut osd = HashMap::new();
+        osd.insert("primary".to_string(), OsdConfig::default());
+
         Self {
             device_id: None,
             sync_ids: vec![],
@@ -194,10 +201,10 @@ impl Default for AppConfig {
             beep_mode_configs,
             sound_mode_configs,
             hotkey,
-            hotkey_mode: default_hotkey_mode(),
+            hotkey_mode: "toggle".to_string(),
             afk: AfkConfig::default(),
-            persistent_overlay: OverlayConfig::default(),
-            osd: OsdConfig::default(),
+            persistent_overlay,
+            osd,
         }
     }
 }
@@ -209,7 +216,6 @@ impl AppConfig {
             fs::create_dir_all(data_dir).ok()?;
             Some(data_dir.join("mic_config.json"))
         } else {
-            // Fallback to current dir if no appdata available
             Some(PathBuf::from("mic_config.json"))
         }
     }
@@ -220,16 +226,20 @@ impl AppConfig {
             .afk
             .timeout
             .clamp(constants::MIN_AFK_TIMEOUT_S, constants::MAX_AFK_TIMEOUT_S);
-        self.persistent_overlay.scale = self
-            .persistent_overlay
-            .scale
-            .clamp(10, constants::MAX_OVERLAY_SCALE);
-        if self.osd.duration == 0 {
-            self.osd.duration = constants::DEFAULT_OSD_DURATION_MS;
+
+        for overlay_cfg in self.persistent_overlay.values_mut() {
+            overlay_cfg.scale = overlay_cfg.scale.clamp(10, constants::MAX_OVERLAY_SCALE);
         }
-        if self.osd.size == 0 {
-            self.osd.size = constants::DEFAULT_OSD_SIZE;
+
+        for osd_cfg in self.osd.values_mut() {
+            if osd_cfg.duration == 0 {
+                osd_cfg.duration = constants::DEFAULT_OSD_DURATION_MS;
+            }
+            if osd_cfg.size == 0 {
+                osd_cfg.size = constants::DEFAULT_OSD_SIZE;
+            }
         }
+
         if self.audio_mode != "beep" && self.audio_mode != "custom" {
             self.audio_mode = "beep".to_string();
         }
@@ -239,27 +249,77 @@ impl AppConfig {
     }
 
     pub fn load() -> Self {
-        if let Some(path) = Self::get_config_path()
-            && path.exists()
-                && let Ok(content) = fs::read_to_string(&path)
-                    && let Ok(mut config) = serde_json::from_str::<Self>(&content) {
-                        // Migrate legacy Python config formats
-                        let mut needs_save = false;
-                        if let Some(mode_val) = config.hotkey.remove("mode")
-                            && let Some(mode_str) = mode_val.as_str() {
-                                config.hotkey_mode = mode_str.to_string();
-                                needs_save = true;
-                            }
+        let path = match Self::get_config_path() {
+            Some(p) if p.exists() => p,
+            _ => return Self::default(),
+        };
 
-                        config.validate();
+        let content = match fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => return Self::default(),
+        };
 
-                        if needs_save {
-                            let _ = config.save();
-                        }
+        // Parse as raw JSON first so we can migrate old flat-format fields.
+        let mut raw: serde_json::Value = match serde_json::from_str(&content) {
+            Ok(v) => v,
+            Err(_) => return Self::default(),
+        };
 
-                        return config;
-                    }
-        Self::default()
+        let mut needs_save = false;
+
+        // Migrate old-format persistent_overlay (flat OverlayConfig → HashMap<String, OverlayConfig>)
+        if raw.get("persistent_overlay").and_then(|v| v.get("enabled")).is_some() {
+            let old = raw["persistent_overlay"].clone();
+            raw["persistent_overlay"] = serde_json::json!({ "primary": old });
+            needs_save = true;
+            tracing::info!("Config migration: converting flat persistent_overlay to HashMap");
+        }
+
+        // Migrate old-format osd (flat OsdConfig → HashMap<String, OsdConfig>)
+        if raw.get("osd").and_then(|v| v.get("enabled")).is_some() {
+            let old = raw["osd"].clone();
+            raw["osd"] = serde_json::json!({ "primary": old });
+            needs_save = true;
+            tracing::info!("Config migration: converting flat osd to HashMap");
+        }
+
+        let mut config: Self = match serde_json::from_value(raw) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!(error = %e, "Config deserialization failed after migration");
+                return Self::default();
+            }
+        };
+
+        // Migrate legacy Python config: hotkey.mode → hotkey_mode
+        if let Some(mode_val) = config.hotkey.remove("mode") {
+            if let Some(mode_str) = mode_val.as_str() {
+                tracing::info!(mode = mode_str, "Config migration: hotkey.mode → hotkey_mode");
+                config.hotkey_mode = mode_str.to_string();
+                needs_save = true;
+            }
+        }
+
+        // Ensure at least a "primary" entry exists for both maps
+        if config.persistent_overlay.is_empty() {
+            config.persistent_overlay.insert("primary".to_string(), OverlayConfig::default());
+            needs_save = true;
+        }
+        if config.osd.is_empty() {
+            config.osd.insert("primary".to_string(), OsdConfig::default());
+            needs_save = true;
+        }
+
+        config.validate();
+
+        if needs_save {
+            match config.save() {
+                Ok(()) => tracing::info!("Config migration saved successfully"),
+                Err(e) => tracing::error!(error = %e, "Config migration save FAILED"),
+            }
+        }
+
+        config
     }
 
     pub fn save(&self) -> Result<(), String> {
@@ -284,13 +344,44 @@ mod tests {
         let cfg = AppConfig::default();
         assert_eq!(cfg.hotkey_mode, "toggle");
         assert!(cfg.beep_enabled);
+        assert!(cfg.persistent_overlay.contains_key("primary"));
+        assert!(cfg.osd.contains_key("primary"));
     }
 
     #[test]
     fn test_config_validation() {
         let mut cfg = AppConfig::default();
-        cfg.osd.duration = 0;
+        cfg.osd.get_mut("primary").unwrap().duration = 0;
         cfg.validate();
-        assert_eq!(cfg.osd.duration, 1500);
+        assert_eq!(cfg.osd["primary"].duration, 1500);
+    }
+
+    #[test]
+    fn test_migration_from_flat_overlay() {
+        // Simulate old-format JSON
+        let old_json = r#"{
+            "persistent_overlay": { "enabled": true, "scale": 64, "x": 200, "y": 300,
+                "show_vu": false, "opacity": 80, "position_mode": "Custom",
+                "locked": false, "sensitivity": 5, "scale": 64, "theme": "Auto" },
+            "osd": { "enabled": false, "duration": 1500, "position": "Bottom", "size": 150, "opacity": 80 }
+        }"#;
+
+        let mut raw: serde_json::Value = serde_json::from_str(old_json).unwrap();
+
+        // Apply migration logic
+        if raw.get("persistent_overlay").and_then(|v| v.get("enabled")).is_some() {
+            let old = raw["persistent_overlay"].clone();
+            raw["persistent_overlay"] = serde_json::json!({ "primary": old });
+        }
+        if raw.get("osd").and_then(|v| v.get("enabled")).is_some() {
+            let old = raw["osd"].clone();
+            raw["osd"] = serde_json::json!({ "primary": old });
+        }
+
+        let cfg: AppConfig = serde_json::from_value(raw).unwrap();
+        assert!(cfg.persistent_overlay.contains_key("primary"));
+        assert!(cfg.osd.contains_key("primary"));
+        assert!(cfg.persistent_overlay["primary"].enabled);
+        assert_eq!(cfg.persistent_overlay["primary"].x, 200);
     }
 }
