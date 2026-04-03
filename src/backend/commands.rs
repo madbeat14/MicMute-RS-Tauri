@@ -281,6 +281,12 @@ pub async fn open_url(url: String) -> Result<(), String> {
     open::that(&url).map_err(|e| e.to_string())
 }
 
+/// Returns the application version from Cargo.toml.
+#[tauri::command]
+pub fn get_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
 /// Triggers a file picker via Tauri's dialog plugin.
 #[tauri::command]
 pub async fn pick_audio_file(app: tauri::AppHandle) -> Result<Option<String>, String> {

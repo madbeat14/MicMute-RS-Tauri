@@ -398,6 +398,7 @@ pub(crate) fn build_tray_menu<M: Manager<tauri::Wry>>(
         &PredefinedMenuItem::separator(app)?,
         &MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?,
         &MenuItem::with_id(app, "help", "Help", true, None::<&str>)?,
+        &MenuItem::with_id(app, "about", "About", true, None::<&str>)?,
         &PredefinedMenuItem::separator(app)?,
         &MenuItem::with_id(app, "quit", "Exit", true, None::<&str>)?,
     ]);
@@ -834,7 +835,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .on_window_event(|win, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event
-                && win.label() == "settings" {
+                && matches!(win.label(), "settings" | "about") {
                     let _ = win.hide();
                     api.prevent_close();
                 }
@@ -853,8 +854,9 @@ pub fn run() {
                 let tray_icon = load_tray_icon(false, is_light).ok();
                 let tray_menu = build_tray_menu(app, &cfg, &devices).ok();
 
+                let version = env!("CARGO_PKG_VERSION");
                 let mut tray_builder = TrayIconBuilder::with_id("main")
-                    .tooltip("MicMuteRs");
+                    .tooltip(&format!("MicMuteRs v{version} — Unmuted"));
 
                 if let Some(icon) = tray_icon {
                     tray_builder = tray_builder.icon(icon);
@@ -981,6 +983,7 @@ pub fn run() {
             commands::set_run_on_startup_cmd,
             commands::get_run_on_startup_cmd,
             commands::open_url,
+            commands::get_app_version,
             commands::pick_audio_file,
             commands::preview_audio_feedback,
             commands::get_overlay_background_is_light,
@@ -1016,6 +1019,9 @@ pub fn update_tray_icon(app: &AppHandle, is_muted: bool) {
     if let Ok(icon) = load_tray_icon(is_muted, is_light)
         && let Some(tray) = app.tray_by_id("main") {
             let _ = tray.set_icon(Some(icon));
+            let version = env!("CARGO_PKG_VERSION");
+            let state = if is_muted { "Muted" } else { "Unmuted" };
+            let _ = tray.set_tooltip(Some(&format!("MicMuteRs v{version} — {state}")));
         }
 }
 
@@ -1161,7 +1167,14 @@ fn handle_tray_event(app: &AppHandle, id: &str, state: &Arc<AppState>) {
             }
         }
         "help" => {
-            let _ = open::that("https://github.com/madbeat14/MicMuteRS");
+            let _ = open::that("https://github.com/madbeat14/MicMute-RS-Tauri");
+        }
+        "about" => {
+            if let Some(win) = app.get_webview_window("about") {
+                let _ = win.show();
+                let _ = win.center();
+                let _ = win.set_focus();
+            }
         }
         id if id.starts_with("mic_") => {
             let dev_id = &id[4..];

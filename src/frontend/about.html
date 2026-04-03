@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>About MicMuteRs</title>
+    <link rel="stylesheet" href="styles.css" />
+    <style>
+        html, body {
+            background: var(--bg-base) !important;
+            color: var(--text-1);
+            margin: 0;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        .about-icon {
+            width: 64px;
+            height: 64px;
+            margin-bottom: 12px;
+        }
+
+        .about-title {
+            font-size: 1.3rem;
+            font-weight: 700;
+            color: var(--text-1);
+            margin: 0 0 4px;
+        }
+
+        .about-version {
+            font-size: 0.85rem;
+            color: var(--text-2);
+            margin: 0 0 14px;
+        }
+
+        .about-desc {
+            font-size: 0.82rem;
+            color: var(--text-2);
+            max-width: 280px;
+            line-height: 1.5;
+            margin: 0 0 18px;
+        }
+
+        .about-link {
+            font-size: 0.82rem;
+            color: var(--accent);
+            text-decoration: none;
+            cursor: pointer;
+        }
+
+        .about-link:hover {
+            text-decoration: underline;
+        }
+
+        .about-author {
+            font-size: 0.78rem;
+            color: var(--text-3);
+            margin-top: 14px;
+        }
+    </style>
+</head>
+
+<body>
+    <img class="about-icon" src="assets/mic_white.svg" alt="MicMuteRs" />
+    <p class="about-title">MicMuteRs</p>
+    <p class="about-version" id="about-version"></p>
+    <p class="about-desc">
+        A lightweight, non-intrusive microphone mute toggle utility with native hooks, overlay, and OSD notifications.
+    </p>
+    <a class="about-link" id="about-repo">View on GitHub</a>
+    <p class="about-author">Author: madbeat14</p>
+
+    <script>
+        (async () => {
+            const { invoke } = window.__TAURI__.core;
+            try {
+                const version = await invoke("get_app_version");
+                document.getElementById("about-version").textContent = "v" + version;
+            } catch (_) {}
+
+            const repo = "https://github.com/madbeat14/MicMute-RS-Tauri";
+            document.getElementById("about-repo").addEventListener("click", (e) => {
+                e.preventDefault();
+                invoke("open_url", { url: repo });
+            });
+        })();
+    </script>
+</body>
+
+</html>

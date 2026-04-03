@@ -42,6 +42,12 @@ async function init() {
 
     await loadMonitors();
 
+    try {
+        const ver = await invoke("get_app_version");
+        const el = document.getElementById("settings-app-version");
+        if (el) el.textContent = "v" + ver;
+    } catch (_) {}
+
     applyConfigToUI();
     setupEventListeners();
     if (typeof setupHotkeyPassthrough === 'function') setupHotkeyPassthrough();
@@ -358,7 +364,7 @@ function setupEventListeners() {
 
     document.getElementById("link-help").addEventListener("click", e => {
         e.preventDefault();
-        invoke("open_url", { url: "https://github.com/madbeat14/MicMuteRS" });
+        invoke("open_url", { url: "https://github.com/madbeat14/MicMute-RS-Tauri" });
     });
 }
 

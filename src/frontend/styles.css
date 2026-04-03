@@ -613,6 +613,27 @@ body {
   margin-top: 16px;
 }
 
+/* ── ABOUT INLINE (Settings tab) ──────────────────── */
+.about-inline-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-1);
+  margin: 0 0 6px;
+}
+
+.about-inline-desc {
+  font-size: 0.8rem;
+  color: var(--text-2);
+  line-height: 1.5;
+  margin: 0 0 6px;
+}
+
+.about-inline-author {
+  font-size: 0.78rem;
+  color: var(--text-3);
+  margin: 0;
+}
+
 /* ── OVERLAY PAGE SPECIFIC STYLES ──────────────────── */
 /* Contains the transparent floating widget for the persistent mic icon */
 .overlay-page {

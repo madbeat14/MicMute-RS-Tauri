@@ -1,7 +1,7 @@
 {
     "$schema": "https://schema.tauri.app/config/2",
     "productName": "MicMuteRs",
-    "version": "0.1.8",
+    "version": "0.1.9",
     "identifier": "com.madbeat14.micmuters",
     "build": {
         "frontendDist": "src/frontend"
@@ -78,6 +78,20 @@
                 "transparent": true,
                 "visible": false,
                 "alwaysOnTop": true,
+                "skipTaskbar": true,
+                "additionalBrowserArgs": "--disable-features=HardwareMediaKeyHandling"
+            },
+            {
+                "label": "about",
+                "title": "About MicMuteRs",
+                "url": "about.html",
+                "width": 360,
+                "height": 280,
+                "resizable": false,
+                "decorations": true,
+                "transparent": false,
+                "visible": false,
+                "center": true,
                 "skipTaskbar": true,
                 "additionalBrowserArgs": "--disable-features=HardwareMediaKeyHandling"
             }
