@@ -283,6 +283,56 @@ function setupEventListeners() {
         }
     });
 
+    // Sync overlay size proportionally across monitors (primary is reference)
+    document.getElementById("btn-sync-overlay-size").addEventListener("click", () => {
+        if (!window.config || !window.monitors || window.monitors.length < 2) {
+            showDebug("Need multiple monitors to sync"); return;
+        }
+        const primary = window.monitors.find(m => m.is_primary) || window.monitors[0];
+        const primaryCfg = window.config.persistent_overlay["primary"];
+        if (!primaryCfg) { showDebug("No primary overlay config"); return; }
+        const primaryHeight = primary.size.height / primary.scale_factor;
+        const primaryScale = primaryCfg.scale;
+        for (const mon of window.monitors) {
+            if (mon.is_primary) continue;
+            const monHeight = mon.size.height / mon.scale_factor;
+            const synced = Math.round(primaryScale * monHeight / primaryHeight);
+            const key = mon.label_key;
+            if (!window.config.persistent_overlay[key]) {
+                window.config.persistent_overlay[key] = { ...primaryCfg };
+            }
+            window.config.persistent_overlay[key].scale = synced;
+        }
+        applyConfigToUI();
+        debouncedSave();
+        showDebug("Overlay size synced across monitors");
+    });
+
+    // Sync OSD size proportionally across monitors (primary is reference)
+    document.getElementById("btn-sync-osd-size").addEventListener("click", () => {
+        if (!window.config || !window.monitors || window.monitors.length < 2) {
+            showDebug("Need multiple monitors to sync"); return;
+        }
+        const primary = window.monitors.find(m => m.is_primary) || window.monitors[0];
+        const primaryOsd = window.config.osd["primary"];
+        if (!primaryOsd) { showDebug("No primary OSD config"); return; }
+        const primaryHeight = primary.size.height / primary.scale_factor;
+        const primarySize = primaryOsd.size;
+        for (const mon of window.monitors) {
+            if (mon.is_primary) continue;
+            const monHeight = mon.size.height / mon.scale_factor;
+            const synced = Math.round(primarySize * monHeight / primaryHeight);
+            const key = mon.label_key;
+            if (!window.config.osd[key]) {
+                window.config.osd[key] = { ...primaryOsd };
+            }
+            window.config.osd[key].size = synced;
+        }
+        applyConfigToUI();
+        debouncedSave();
+        showDebug("OSD size synced across monitors");
+    });
+
     document.getElementById("sel-device").addEventListener("change", async e => {
         const id = e.target.value || null;
         await invoke("set_device", { deviceId: id }).catch(err => showDebug("Device switch failed: " + err));

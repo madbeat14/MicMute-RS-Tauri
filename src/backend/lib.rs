@@ -186,7 +186,10 @@ pub fn sync_overlay_windows(app: &AppHandle, config: &config::AppConfig, monitor
         let key = &mon.label_key;
         map.insert(label.to_string(), key.clone());
 
-        let overlay_cfg = config.persistent_overlay.get(key).cloned().unwrap_or_default();
+        let overlay_cfg = config.persistent_overlay.get(key)
+            .or_else(|| config.persistent_overlay.get("primary"))
+            .cloned()
+            .unwrap_or_default();
 
         if let Some(win) = app.get_webview_window(label) {
             if overlay_cfg.enabled {
@@ -238,7 +241,10 @@ pub fn sync_osd_windows(app: &AppHandle, config: &config::AppConfig, monitors: &
         let key = &mon.label_key;
         map.insert(label.to_string(), key.clone());
 
-        let osd_cfg = config.osd.get(key).cloned().unwrap_or_default();
+        let osd_cfg = config.osd.get(key)
+            .or_else(|| config.osd.get("primary"))
+            .cloned()
+            .unwrap_or_default();
         if !osd_cfg.enabled
             && let Some(win) = app.get_webview_window(label) {
                 let _ = win.hide();
@@ -614,11 +620,9 @@ fn init_hotkeys(cfg: &config::AppConfig) -> hotkey::HotkeyManager {
 
 fn spawn_hotkey_loop(app_handle: AppHandle, state: Arc<AppState>) {
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_secs(2));
-        {
-            let hk = state.hotkeys.lock();
-            hk.start_hook();
-        }
+        // Hook installation moved to setup() for faster startup.
+        // Wait briefly for the hook thread to be ready before entering the poll loop.
+        std::thread::sleep(std::time::Duration::from_millis(300));
 
         let mut topmost_counter: u32 = 0;
         let mut afk_counter: u32 = 0;
@@ -800,7 +804,7 @@ pub fn run() {
     }
 
     tracing::debug!("Loading config");
-    let cfg = config::AppConfig::load();
+    let mut cfg = config::AppConfig::load();
     tracing::debug!("Getting audio devices");
     // Run on a separate thread so COM (COINIT_MULTITHREADED) never contaminates
     // the main thread's apartment — tao requires OleInitialize (STA) on the main thread.
@@ -894,12 +898,57 @@ pub fn run() {
                 // second monitor → overlay-2/osd-2.
                 {
                     let monitors = get_monitor_info(app.handle());
+
+                    // Ensure every connected monitor has a config entry.
+                    // Missing monitors inherit from "primary" so the overlay/OSD
+                    // starts at the correct size without waiting for a manual sync.
+                    let mut cfg_dirty = false;
+                    for mon in &monitors {
+                        let key = &mon.label_key;
+                        if !cfg.persistent_overlay.contains_key(key) {
+                            let base = cfg.persistent_overlay.get("primary").cloned().unwrap_or_default();
+                            cfg.persistent_overlay.insert(key.clone(), base);
+                            cfg_dirty = true;
+                            tracing::info!(monitor = %key, "Created overlay config entry from primary");
+                        }
+                        if !cfg.osd.contains_key(key) {
+                            let base = cfg.osd.get("primary").cloned().unwrap_or_default();
+                            cfg.osd.insert(key.clone(), base);
+                            cfg_dirty = true;
+                            tracing::info!(monitor = %key, "Created OSD config entry from primary");
+                        }
+                    }
+                    if cfg_dirty {
+                        *state.config.lock() = cfg.clone();
+                        if let Err(e) = cfg.save() {
+                            tracing::error!(error = %e, "Failed to save auto-populated monitor configs");
+                        }
+                    }
+
                     sync_overlay_windows(app.handle(), &cfg, &monitors);
                     sync_osd_windows(app.handle(), &cfg, &monitors);
                     tracing::info!(
                         monitor_count = monitors.len(),
                         "Static overlay/OSD windows configured"
                     );
+
+                    // Emit config-update so overlay/OSD JS re-queries monitor keys
+                    // and applies correct per-monitor sizing after the window map is populated.
+                    let _ = app.emit("config-update", serde_json::json!({ "config": cfg }));
+                }
+
+                // ── Install keyboard hook ──
+                // Now that WebView2 windows are initialized, install the LL
+                // keyboard hook on a short delay so it lands last in the
+                // Windows hook chain (LIFO — last registered = first called).
+                {
+                    let state_hk = Arc::clone(&state);
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                        let hk = state_hk.hotkeys.lock();
+                        hk.start_hook();
+                        tracing::info!("Keyboard hook installed");
+                    });
                 }
 
                 tracing::info!("Tauri setup complete");

@@ -182,6 +182,11 @@ async function updateIcon() {
     icon.style.height = size + "px";
     icon.style.opacity = opacity;
 
+    // Resize window to match icon size (keeps backend and frontend in sync)
+    const w = myCfg.show_vu ? size + 30 : size;
+    const { LogicalSize } = window.__TAURI__.window;
+    _selfWin.setSize(new LogicalSize(w, size)).catch(() => {});
+
     const dot = document.getElementById("vu-dot"); 
     if (dot) {
         dot.style.display = myCfg.show_vu ? "block" : "none";
