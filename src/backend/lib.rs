@@ -935,6 +935,17 @@ pub fn run() {
                     // Emit config-update so overlay/OSD JS re-queries monitor keys
                     // and applies correct per-monitor sizing after the window map is populated.
                     let _ = app.emit("config-update", serde_json::json!({ "config": cfg }));
+
+                    // Safety net: re-emit after 500ms for overlay windows whose JS
+                    // hasn't registered listeners yet. The handler is idempotent.
+                    {
+                        let app_handle = app.handle().clone();
+                        let cfg_clone = cfg.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_millis(500));
+                            let _ = app_handle.emit("config-update", serde_json::json!({ "config": cfg_clone }));
+                        });
+                    }
                 }
 
                 // ── Install keyboard hook ──

@@ -38,29 +38,14 @@ function getMyConfig() {
 }
 
 async function init() {
-    // Query the backend for which monitor config key this window is assigned to.
-    try {
-        monitorKey = await invoke("get_window_monitor_key", { label: _label });
-    } catch (e) {
-        console.error("overlay: failed to get monitor key:", e);
-    }
-    if (!monitorKey) monitorKey = "primary"; // fallback
-
-    try {
-        config = await invoke("get_config");
-        const state = await invoke("get_state");
-        isMuted = state.is_muted;
-
-        await updateIcon();
-    } catch (e) {
-        console.error("overlay init:", e);
-    }
-
+    // Register event listeners FIRST, before any async IPC calls.
+    // Tauri's listen() registers the handler synchronously — the returned
+    // Promise just resolves to the unlisten function. This ensures we never
+    // miss the config-update event emitted from setup() during startup.
     if (unlistenState) unlistenState();
-    unlistenState = await listen("state-update", e => {
+    const statePromise = listen("state-update", e => {
         isMuted = e.payload.is_muted;
         updateIcon();
-        // Update VU dot if needed
         const dot = document.getElementById("vu-dot");
         if (dot) {
             const myCfg = getMyConfig();
@@ -74,7 +59,7 @@ async function init() {
     });
 
     if (unlistenConfig) unlistenConfig();
-    unlistenConfig = await listen("config-update", async e => {
+    const configPromise = listen("config-update", async e => {
         config = e.payload.config;
         // Re-query monitor key in case the mapping was populated after our
         // initial init (race during startup).
@@ -85,6 +70,36 @@ async function init() {
         updateDragRegion();
         updateIcon();
     });
+
+    // Now do async IPC initialization.
+    try {
+        monitorKey = await invoke("get_window_monitor_key", { label: _label });
+    } catch (e) {
+        console.error("overlay: failed to get monitor key:", e);
+    }
+    if (!monitorKey) monitorKey = "primary"; // fallback
+
+    try {
+        config = await invoke("get_config");
+        const state = await invoke("get_state");
+        isMuted = state.is_muted;
+
+        // Re-query monitor key — the async IPC calls above gave the backend
+        // enough time to populate WINDOW_MONITOR_MAP via sync_overlay_windows.
+        // Without this, we'd use the stale "primary" fallback and set wrong size.
+        try {
+            const freshKey = await invoke("get_window_monitor_key", { label: _label });
+            if (freshKey) monitorKey = freshKey;
+        } catch (_) {}
+
+        await updateIcon();
+    } catch (e) {
+        console.error("overlay init:", e);
+    }
+
+    // Capture unlisten functions (listeners are already active from above).
+    unlistenState = await statePromise;
+    unlistenConfig = await configPromise;
 
     // Periodically re-assert always-on-top.
     if (topmostIntervalId !== null) clearInterval(topmostIntervalId);
