@@ -5,6 +5,10 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
+fn default_theme() -> String {
+    "Auto".to_string()
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
 pub struct BeepConfig {
@@ -97,6 +101,8 @@ pub struct OsdConfig {
     pub position: String,
     pub size: u32,
     pub opacity: u8,
+    #[serde(default = "default_theme")]
+    pub theme: String,
 }
 
 impl Default for OsdConfig {
@@ -107,6 +113,7 @@ impl Default for OsdConfig {
             position: "Bottom".to_string(),
             size: 150,
             opacity: 80,
+            theme: "Auto".to_string(),
         }
     }
 }

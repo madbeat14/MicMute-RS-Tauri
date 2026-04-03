@@ -219,6 +219,7 @@ function applyOsdConfigToUI() {
     setSlider("slider-osd-dur", osd.duration, "osd-dur-val");
     setSlider("slider-osd-size", osd.size, "osd-size-val");
     setSlider("slider-osd-opacity", osd.opacity, "osd-opacity-val");
+    setSelect("sel-osd-theme", osd.theme || "Auto");
     setSelect("sel-osd-pos", osd.position);
     updateSubOptions("chk-osd", "osd-options");
 }
@@ -521,6 +522,11 @@ function bindOsdListeners() {
     bindSlider("slider-osd-opacity", "osd-opacity-val", v => {
         const osd = getOsdConfigForMonitor(window.selectedOsdMonitor || "primary");
         if (osd) { osd.opacity = v; }
+    });
+    document.getElementById("sel-osd-theme").addEventListener("change", e => {
+        const osd = getOsdConfigForMonitor(window.selectedOsdMonitor || "primary");
+        if (osd) { osd.theme = e.target.value; }
+        debouncedSave();
     });
     document.getElementById("sel-osd-pos").addEventListener("change", e => {
         const osd = getOsdConfigForMonitor(window.selectedOsdMonitor || "primary");

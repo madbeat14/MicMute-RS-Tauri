@@ -166,19 +166,20 @@ async function updateIcon() {
     const myCfg = getMyConfig();
     if (!myCfg) return;
 
-    let isLight = false;
+    // Theme describes the icon color: "Dark" = dark/black icons, "Light" = light/white icons.
+    let useDarkIcon = false;
 
-    if (myCfg.theme === "Light") {
-        isLight = true;
-    } else if (myCfg.theme === "Dark") {
-        isLight = false;
+    if (myCfg.theme === "Dark") {
+        useDarkIcon = true;
+    } else if (myCfg.theme === "Light") {
+        useDarkIcon = false;
     } else {
         // Auto mode: sample the background behind this specific overlay window
         try {
-            isLight = await invoke("get_overlay_background_is_light", { windowLabel: _label });
+            useDarkIcon = await invoke("get_overlay_background_is_light", { windowLabel: _label });
         } catch (e) {
             console.error("Failed to get background theme:", e);
-            isLight = window.matchMedia("(prefers-color-scheme: light)").matches;
+            useDarkIcon = window.matchMedia("(prefers-color-scheme: light)").matches;
         }
     }
 
@@ -186,9 +187,9 @@ async function updateIcon() {
 
     let src;
     if (isMuted) {
-        src = isLight ? "assets/mic_muted_black.svg" : "assets/mic_muted_white.svg";
+        src = useDarkIcon ? "assets/mic_muted_black.svg" : "assets/mic_muted_white.svg";
     } else {
-        src = isLight ? "assets/mic_black.svg" : "assets/mic_white.svg";
+        src = useDarkIcon ? "assets/mic_black.svg" : "assets/mic_white.svg";
     }
 
     icon.src = src;

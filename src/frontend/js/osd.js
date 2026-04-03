@@ -13,7 +13,7 @@ let unlistenOsdShow = null;
 async function init() {
     if (unlistenOsdShow) unlistenOsdShow();
     unlistenOsdShow = await listen("osd-show", e => {
-        showOsd(e.payload.is_muted, e.payload.duration, e.payload.opacity);
+        showOsd(e.payload.is_muted, e.payload.duration, e.payload.opacity, e.payload.theme, e.payload.is_system_light);
     });
 }
 
@@ -25,17 +25,28 @@ let hideTimer = null;
  * @param {number} duration - The duration in milliseconds to show the OSD before fading out.
  * @param {number} opacity - The opacity percentage (0-100) for the OSD card.
  */
-function showOsd(isMuted, duration, opacity) {
+function showOsd(isMuted, duration, opacity, theme, isSystemLight) {
     if (hideTimer) clearTimeout(hideTimer);
     const card = document.getElementById("osd-card");
     const icon = document.getElementById("osd-icon");
     if (!icon || !card) return;
 
-    const isLight = window.matchMedia("(prefers-color-scheme: light)").matches;
-    if (isMuted) {
-        icon.src = isLight ? "assets/mic_muted_black.svg" : "assets/mic_muted_white.svg";
+    // Theme describes the icon color: "Dark" = dark/black icons, "Light" = light/white icons.
+    let useDarkIcon;
+    if (theme === "Dark") {
+        useDarkIcon = true;
+    } else if (theme === "Light") {
+        useDarkIcon = false;
     } else {
-        icon.src = isLight ? "assets/mic_black.svg" : "assets/mic_white.svg";
+        // Auto: use system theme from the backend (registry check).
+        // Light system → dark icons for contrast; dark system → light icons.
+        useDarkIcon = !!isSystemLight;
+    }
+
+    if (isMuted) {
+        icon.src = useDarkIcon ? "assets/mic_muted_black.svg" : "assets/mic_muted_white.svg";
+    } else {
+        icon.src = useDarkIcon ? "assets/mic_black.svg" : "assets/mic_white.svg";
     }
 
     // Reset animation

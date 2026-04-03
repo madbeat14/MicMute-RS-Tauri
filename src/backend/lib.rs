@@ -1048,6 +1048,7 @@ pub fn trigger_osd(app: &AppHandle, is_muted: bool, cfg: &config::AppConfig, mon
         let size = osd_cfg.size;
         let opacity = osd_cfg.opacity;
         let position = osd_cfg.position.clone();
+        let theme = osd_cfg.theme.clone();
 
         let osd_win = app.get_webview_window(label);
 
@@ -1078,7 +1079,13 @@ pub fn trigger_osd(app: &AppHandle, is_muted: bool, cfg: &config::AppConfig, mon
             let _ = osd_win.set_always_on_top(true);
             let _ = osd_win.emit(
                 "osd-show",
-                serde_json::json!({ "is_muted": is_muted, "duration": duration, "opacity": opacity }),
+                serde_json::json!({
+                    "is_muted": is_muted,
+                    "duration": duration,
+                    "opacity": opacity,
+                    "theme": theme,
+                    "is_system_light": theme::is_system_light_theme(),
+                }),
             );
 
             // Schedule hide via per-monitor timer.
