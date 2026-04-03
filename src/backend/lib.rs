@@ -159,13 +159,12 @@ fn apply_overlay_config(win: &tauri::WebviewWindow, cfg: &config::OverlayConfig)
     let w = if cfg.show_vu { scale + 30.0 } else { scale };
     let _ = win.set_size(tauri::LogicalSize::new(w, scale));
     let _ = win.set_ignore_cursor_events(true);
-    if !cfg.locked {
-        if let Ok(tauri_hwnd) = win.hwnd() {
+    if !cfg.locked
+        && let Ok(tauri_hwnd) = win.hwnd() {
             use windows::Win32::Foundation::HWND;
             let hwnd = HWND(tauri_hwnd.0);
             crate::utils::set_click_through(hwnd, false);
         }
-    }
     let _ = win.set_always_on_top(true);
 }
 
@@ -211,8 +210,8 @@ pub fn sync_overlay_windows(app: &AppHandle, config: &config::AppConfig, monitor
     }
 
     // Hide unused static overlay windows (more labels than monitors).
-    for idx in sorted.len()..OVERLAY_LABELS.len() {
-        if let Some(win) = app.get_webview_window(OVERLAY_LABELS[idx]) {
+    for label in OVERLAY_LABELS.iter().skip(sorted.len()) {
+        if let Some(win) = app.get_webview_window(label) {
             let _ = win.hide();
         }
     }
@@ -240,16 +239,15 @@ pub fn sync_osd_windows(app: &AppHandle, config: &config::AppConfig, monitors: &
         map.insert(label.to_string(), key.clone());
 
         let osd_cfg = config.osd.get(key).cloned().unwrap_or_default();
-        if !osd_cfg.enabled {
-            if let Some(win) = app.get_webview_window(label) {
+        if !osd_cfg.enabled
+            && let Some(win) = app.get_webview_window(label) {
                 let _ = win.hide();
             }
-        }
     }
 
     // Hide unused static OSD windows.
-    for idx in sorted.len()..OSD_LABELS.len() {
-        if let Some(win) = app.get_webview_window(OSD_LABELS[idx]) {
+    for label in OSD_LABELS.iter().skip(sorted.len()) {
+        if let Some(win) = app.get_webview_window(label) {
             let _ = win.hide();
         }
     }
@@ -493,15 +491,14 @@ fn spawn_audio_worker(
                             }
                         }
                         AudioMsg::SetMute(mute, cfg) => {
-                            if let Some(ref mut c) = controller {
-                                if c.set_mute(mute, &cfg).is_ok() {
+                            if let Some(ref mut c) = controller
+                                && c.set_mute(mute, &cfg).is_ok() {
                                     current_muted = mute;
                                     let peak = c.get_peak_value().unwrap_or(0.0);
                                     finalize_mute_change(&app, &state, mute, peak, &cfg);
                                     _active_sink =
                                         audio::play_feedback(c.stream_handle().as_ref(), mute, &cfg);
                                 }
-                            }
                         }
                         AudioMsg::SetDevice(id) => {
                             if let Ok(new_ctrl) = audio::AudioController::new(id.as_ref()) {
@@ -537,8 +534,8 @@ fn spawn_audio_worker(
                     Err(std_mpsc::RecvTimeoutError::Timeout) => {
                         // Periodic peak level polling (~10Hz)
                         if last_peak_poll.elapsed() >= std::time::Duration::from_millis(100) {
-                            if let Some(ref c) = controller {
-                                if let Ok(peak) = c.get_peak_value() {
+                            if let Some(ref c) = controller
+                                && let Ok(peak) = c.get_peak_value() {
                                     state.peak_level.store(
                                         (peak * 10000.0) as u32,
                                         std::sync::atomic::Ordering::Relaxed,
@@ -546,7 +543,6 @@ fn spawn_audio_worker(
                                     // Emit state update periodically for VU meters
                                     emit_state(&app, current_muted, peak);
                                 }
-                            }
                             last_peak_poll = std::time::Instant::now();
                         }
                     }
@@ -618,21 +614,10 @@ fn init_hotkeys(cfg: &config::AppConfig) -> hotkey::HotkeyManager {
 
 fn spawn_hotkey_loop(app_handle: AppHandle, state: Arc<AppState>) {
     std::thread::spawn(move || {
-        // Direct file diagnostic — bypasses tracing to verify thread is alive
-        let diag_path = std::env::temp_dir().join("micmute_thread_diag.log");
-        let _ = std::fs::write(&diag_path, format!("hotkey thread started: {:?}\n", std::time::SystemTime::now()));
-
         std::thread::sleep(std::time::Duration::from_secs(2));
         {
             let hk = state.hotkeys.lock();
             hk.start_hook();
-        }
-
-        // Append after hook starts
-        if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&diag_path) {
-            use std::io::Write;
-            let _ = writeln!(f, "hook started, entering loop: {:?}", std::time::SystemTime::now());
-            let _ = f.flush();
         }
 
         let mut topmost_counter: u32 = 0;
@@ -667,7 +652,6 @@ fn spawn_hotkey_loop(app_handle: AppHandle, state: Arc<AppState>) {
         let topmost_ticks =
             (constants::OVERLAY_TOPMOST_INTERVAL_MS / constants::HOTKEY_POLL_INTERVAL_MS) as u32;
         let mut diag_counter: u32 = 0;
-        let diag_path = std::env::temp_dir().join("micmute_thread_diag.log");
 
         loop {
             // Periodic diagnostic heartbeat (every ~5s)
@@ -679,11 +663,6 @@ fn spawn_hotkey_loop(app_handle: AppHandle, state: Arc<AppState>) {
                     is_toggle = cached_is_toggle,
                     "hotkey loop heartbeat"
                 );
-                if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&diag_path) {
-                    use std::io::Write;
-                    let _ = writeln!(f, "heartbeat: {:?}", std::time::SystemTime::now());
-                    let _ = f.flush();
-                }
             }
 
             // ── Process hotkey events ──
@@ -745,13 +724,12 @@ fn spawn_hotkey_loop(app_handle: AppHandle, state: Arc<AppState>) {
                     let ah = app_handle.clone();
                     let _ = app_handle.run_on_main_thread(move || {
                         for (label, win) in ah.webview_windows() {
-                            if label == "overlay" || label.starts_with("overlay-") {
-                                if let Ok(tauri_hwnd) = win.hwnd() {
+                            if (label == "overlay" || label.starts_with("overlay-"))
+                                && let Ok(tauri_hwnd) = win.hwnd() {
                                     use windows::Win32::Foundation::HWND;
                                     let hwnd = HWND(tauri_hwnd.0);
                                     crate::utils::force_topmost(hwnd);
                                 }
-                            }
                         }
                     });
                 }
@@ -776,7 +754,7 @@ fn spawn_hotkey_loop(app_handle: AppHandle, state: Arc<AppState>) {
 pub fn run() {
     std::panic::set_hook(Box::new(|info| {
         let location = info.location().map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column())).unwrap_or_else(|| "unknown".to_string());
-        let payload = info.payload().downcast_ref::<&str>().map(|s| *s).or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str())).unwrap_or("no payload");
+        let payload = info.payload().downcast_ref::<&str>().copied().or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str())).unwrap_or("no payload");
         tracing::error!(panic = %payload, location = %location, "APPLICATION PANIC");
         eprintln!("PANIC: {} at {}", payload, location);
     }));
@@ -851,12 +829,11 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .on_window_event(|win, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if win.label() == "settings" {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event
+                && win.label() == "settings" {
                     let _ = win.hide();
                     api.prevent_close();
                 }
-            }
         })
         .setup({
             let state = Arc::clone(&state);
@@ -976,11 +953,10 @@ pub fn do_set_mute(app: &AppHandle, mute: bool) {
 
 pub fn update_tray_icon(app: &AppHandle, is_muted: bool) {
     let is_light = theme::is_system_light_theme();
-    if let Ok(icon) = load_tray_icon(is_muted, is_light) {
-        if let Some(tray) = app.tray_by_id("main") {
+    if let Ok(icon) = load_tray_icon(is_muted, is_light)
+        && let Some(tray) = app.tray_by_id("main") {
             let _ = tray.set_icon(Some(icon));
         }
-    }
 }
 
 // ─────────────────────────────────────────
@@ -1041,16 +1017,9 @@ pub fn trigger_osd(app: &AppHandle, is_muted: bool, cfg: &config::AppConfig, mon
 
             // Schedule hide via per-monitor timer.
             let label_owned = label.to_string();
-            if !get_osd_timers().lock().contains_key(&label_owned) {
-                let new_timer = OsdTimer::new();
-                get_osd_timers()
-                    .lock()
-                    .entry(label_owned.clone())
-                    .or_insert(new_timer);
-            }
-            if let Some(timer) = get_osd_timers().lock().get_mut(&label_owned) {
-                timer.schedule_hide(osd_win, std::time::Duration::from_millis(duration as u64));
-            }
+            let mut timers = get_osd_timers().lock();
+            let timer = timers.entry(label_owned).or_insert_with(OsdTimer::new);
+            timer.schedule_hide(osd_win, std::time::Duration::from_millis(duration as u64));
         }
     }
 }

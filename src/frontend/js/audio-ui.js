@@ -15,9 +15,9 @@ async function pickAudioFile(key) {
     try {
         const path = await window.__TAURI__.core.invoke("pick_audio_file");
         if (path) {
-            if (!config.sound_config) config.sound_config = {};
-            if (!config.sound_config[key]) config.sound_config[key] = { file: "", volume: 50 };
-            config.sound_config[key].file = path;
+            if (!window.config.sound_config) window.config.sound_config = {};
+            if (!window.config.sound_config[key]) window.config.sound_config[key] = { file: "", volume: 50 };
+            window.config.sound_config[key].file = path;
             document.getElementById(`path-${key}`).value = path;
             if (typeof debouncedSave === 'function') debouncedSave();
         }

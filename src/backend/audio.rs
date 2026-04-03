@@ -388,7 +388,15 @@ pub fn get_audio_devices() -> Result<Vec<(String, String)>> {
 
                     if let Ok(store) = device.OpenPropertyStore(STGM_READ)
                         && let Ok(prop_var) = store.GetValue(&PKEY_Device_FriendlyName) {
-                            let name_str = {
+                            // SAFETY: We check the variant type (vt) equals VT_LPWSTR (31)
+                            // before accessing the union's string pointer. When vt == VT_LPWSTR,
+                            // the PROPVARIANT data at offset 8 is a valid LPWSTR pointer.
+                            // SAFETY: vt is at offset 0 of PROPVARIANT (u16 discriminant).
+                            // We only access the string pointer when vt == VT_LPWSTR.
+                            // All pointer operations are within the outer unsafe block.
+                            use windows::Win32::System::Variant::VT_LPWSTR;
+                            let vt = (*(&prop_var as *const _ as *const u16)) as u32;
+                            let name_str = if vt == VT_LPWSTR.0 as u32 {
                                 let ptr = &prop_var as *const _ as *const u64;
                                 let pwstr_ptr = *(ptr.add(1) as *const *const u16);
                                 if !pwstr_ptr.is_null() {
@@ -397,6 +405,9 @@ pub fn get_audio_devices() -> Result<Vec<(String, String)>> {
                                 } else {
                                     id_string.clone()
                                 }
+                            } else {
+                                tracing::warn!(vt = vt, "PROPVARIANT is not VT_LPWSTR, skipping name extraction");
+                                id_string.clone()
                             };
                             name = name_str;
                         }

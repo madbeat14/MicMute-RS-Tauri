@@ -37,11 +37,11 @@ function vkToName(vk) {
 function rebuildHotkeyRows() {
     const container = document.getElementById("hotkey-rows");
     container.replaceChildren();
-    const mode = config.hotkey_mode;
+    const mode = window.config.hotkey_mode;
     const keys = mode === "toggle" ? ["toggle"] : ["mute", "unmute"];
     for (const key of keys) {
         const label = key.charAt(0).toUpperCase() + key.slice(1);
-        const hkCfg = config.hotkey[key] || { vk: 0, name: "None" };
+        const hkCfg = window.config.hotkey[key] || { vk: 0, name: "None" };
         const currentVk = hkCfg.vk ?? 0;
 
         let options = COMMON_KEYS;
@@ -87,17 +87,17 @@ function rebuildHotkeyRows() {
             startRecording(key);
         });
         row.querySelector(`[data-clear-key="${key}"]`).addEventListener("click", () => {
-            if (!config.hotkey[key]) config.hotkey[key] = {};
-            config.hotkey[key].vk = 0;
-            config.hotkey[key].name = "None";
+            if (!window.config.hotkey[key]) window.config.hotkey[key] = {};
+            window.config.hotkey[key].vk = 0;
+            window.config.hotkey[key].name = "None";
             rebuildHotkeyRows();
             if (typeof debouncedSave === 'function') debouncedSave();
         });
         row.querySelector(`[data-hk-key="${key}"]`).addEventListener("change", e => {
             const vk = parseInt(e.target.value);
-            if (!config.hotkey[key]) config.hotkey[key] = {};
-            config.hotkey[key].vk = vk;
-            config.hotkey[key].name = vkToName(vk);
+            if (!window.config.hotkey[key]) window.config.hotkey[key] = {};
+            window.config.hotkey[key].vk = vk;
+            window.config.hotkey[key].name = vkToName(vk);
             rebuildHotkeyRows();
             if (typeof debouncedSave === 'function') debouncedSave();
         });
@@ -113,7 +113,15 @@ async function startRecording(key) {
     const btn = document.getElementById(`rec-${key}`);
     btn.textContent = "…";
     btn.classList.add("recording");
-    await window.__TAURI__.core.invoke("start_recording_hotkey");
+    try {
+        await window.__TAURI__.core.invoke("start_recording_hotkey");
+    } catch (e) {
+        btn.textContent = "Record";
+        btn.classList.remove("recording");
+        recordingKey = null;
+        if (typeof showDebug === 'function') showDebug("Failed to start recording: " + e);
+        return;
+    }
 
     recordingPollTimer = setInterval(async () => {
         const vk = await window.__TAURI__.core.invoke("get_recorded_hotkey");
@@ -136,7 +144,7 @@ function finishRecording(key, vk) {
     const btn = document.getElementById(`rec-${key}`);
     if (btn) { btn.textContent = "Record"; btn.classList.remove("recording"); }
     window.__TAURI__.core.invoke("stop_recording_hotkey").catch(() => {});
-    config.hotkey[key] = { vk, name: vkToName(vk) };
+    window.config.hotkey[key] = { vk, name: vkToName(vk) };
     rebuildHotkeyRows();
     if (typeof debouncedSave === 'function') debouncedSave();
 }

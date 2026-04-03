@@ -10,6 +10,10 @@ let isMuted = false;
 let vuPollTimer = null;
 let isDragging = false;
 let dragTimeout = null;
+let topmostIntervalId = null;
+let dragMousedownHandler = null;
+let dragMouseupHandler = null;
+let dragMousemoveHandler = null;
 
 let unlistenState = null;
 let unlistenConfig = null;
@@ -83,8 +87,9 @@ async function init() {
     });
 
     // Periodically re-assert always-on-top.
+    if (topmostIntervalId !== null) clearInterval(topmostIntervalId);
     const topmostInterval = await invoke("get_overlay_topmost_interval").catch(() => 500);
-    setInterval(async () => {
+    topmostIntervalId = setInterval(async () => {
         _selfWin.setAlwaysOnTop(true).catch(() => {});
     }, topmostInterval);
 
@@ -98,7 +103,12 @@ function updateDragRegion() {
 }
 
 function setupDragDetection() {
-    const resetDragTimeout = () => {
+    // Remove old handlers if reinitializing
+    if (dragMousedownHandler) document.removeEventListener("mousedown", dragMousedownHandler);
+    if (dragMouseupHandler) document.removeEventListener("mouseup", dragMouseupHandler);
+    if (dragMousemoveHandler) document.removeEventListener("mousemove", dragMousemoveHandler);
+
+    dragMousedownHandler = () => {
         if (dragTimeout) clearTimeout(dragTimeout);
         isDragging = true;
         dragTimeout = setTimeout(() => {
@@ -108,19 +118,20 @@ function setupDragDetection() {
             }
         }, 500);
     };
+    dragMouseupHandler = dragMousedownHandler;
 
     let lastMoveTime = 0;
-    const throttledMove = () => {
+    dragMousemoveHandler = () => {
         const now = Date.now();
         if (now - lastMoveTime >= 50) {
             lastMoveTime = now;
-            resetDragTimeout();
+            dragMousedownHandler();
         }
     };
 
-    document.addEventListener("mousedown", resetDragTimeout);
-    document.addEventListener("mouseup", resetDragTimeout);
-    document.addEventListener("mousemove", throttledMove);
+    document.addEventListener("mousedown", dragMousedownHandler);
+    document.addEventListener("mouseup", dragMouseupHandler);
+    document.addEventListener("mousemove", dragMousemoveHandler);
 }
 
 async function saveCurrentPosition() {
@@ -177,5 +188,16 @@ async function updateIcon() {
     }
 }
 
-window.addEventListener("DOMContentLoaded", init); 
+window.addEventListener("DOMContentLoaded", init);
+
+// Cleanup all resources on window unload to prevent accumulation
+window.addEventListener("beforeunload", () => {
+    if (topmostIntervalId !== null) { clearInterval(topmostIntervalId); topmostIntervalId = null; }
+    if (unlistenState) { unlistenState(); unlistenState = null; }
+    if (unlistenConfig) { unlistenConfig(); unlistenConfig = null; }
+    if (dragMousedownHandler) document.removeEventListener("mousedown", dragMousedownHandler);
+    if (dragMouseupHandler) document.removeEventListener("mouseup", dragMouseupHandler);
+    if (dragMousemoveHandler) document.removeEventListener("mousemove", dragMousemoveHandler);
+    if (dragTimeout) { clearTimeout(dragTimeout); dragTimeout = null; }
+});
 

@@ -256,13 +256,19 @@ impl AppConfig {
 
         let content = match fs::read_to_string(&path) {
             Ok(c) => c,
-            Err(_) => return Self::default(),
+            Err(e) => {
+                tracing::error!(error = %e, path = %path.display(), "Failed to read config file, using defaults");
+                return Self::default();
+            }
         };
 
         // Parse as raw JSON first so we can migrate old flat-format fields.
         let mut raw: serde_json::Value = match serde_json::from_str(&content) {
             Ok(v) => v,
-            Err(_) => return Self::default(),
+            Err(e) => {
+                tracing::error!(error = %e, path = %path.display(), "Failed to parse config JSON, using defaults");
+                return Self::default();
+            }
         };
 
         let mut needs_save = false;
@@ -292,13 +298,12 @@ impl AppConfig {
         };
 
         // Migrate legacy Python config: hotkey.mode → hotkey_mode
-        if let Some(mode_val) = config.hotkey.remove("mode") {
-            if let Some(mode_str) = mode_val.as_str() {
+        if let Some(mode_val) = config.hotkey.remove("mode")
+            && let Some(mode_str) = mode_val.as_str() {
                 tracing::info!(mode = mode_str, "Config migration: hotkey.mode → hotkey_mode");
                 config.hotkey_mode = mode_str.to_string();
                 needs_save = true;
             }
-        }
 
         // Ensure at least a "primary" entry exists for both maps
         if config.persistent_overlay.is_empty() {

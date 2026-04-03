@@ -126,7 +126,7 @@ function showDebug(msg) {
 function updateVU(peak) {
     const bar = document.getElementById("vu-bar");
     if (!bar) return;
-    const threshold = (config?.persistent_overlay?.sensitivity ?? 5) / 100;
+    const threshold = (window.config?.persistent_overlay?.sensitivity ?? 5) / 100;
     if (peak < threshold) {
         bar.style.width = "0%";
         return;

@@ -209,8 +209,12 @@ unsafe extern "system" fn hook_callback(n_code: i32, w_param: WPARAM, l_param: L
         let is_up = w_param_u32 == WM_KEYUP || w_param_u32 == WM_SYSKEYUP;
 
         if is_down || is_up {
+            if l_param.0 == 0 {
+                return unsafe { CallNextHookEx(None, n_code, w_param, l_param) };
+            }
             // SAFETY: When n_code >= 0 and the message is WM_KEYDOWN/WM_KEYUP/WM_SYSKEYDOWN/WM_SYSKEYUP,
             // Windows guarantees l_param points to a valid KBDLLHOOKSTRUCT for the duration of the callback.
+            // We additionally guard against null above.
             let kbd_struct = unsafe { *(l_param.0 as *const KBDLLHOOKSTRUCT) };
 
             if RECORDING_MODE.load(Ordering::SeqCst) {

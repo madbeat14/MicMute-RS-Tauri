@@ -125,21 +125,46 @@ fn create_startup_task() {
     let _ = fs::remove_file(temp_xml_path);
 }
 
+/// Encode a PowerShell script as a base64 UTF-16LE string for use with -EncodedCommand.
+/// This avoids all shell metacharacter injection risks.
+fn powershell_encoded_command(script: &str) -> String {
+    use std::io::Write;
+    let mut buf = Vec::new();
+    for c in script.encode_utf16() {
+        let _ = buf.write_all(&c.to_le_bytes());
+    }
+    // base64 encode
+    const BASE64_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut result = String::new();
+    for chunk in buf.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        result.push(BASE64_CHARS[((triple >> 18) & 0x3F) as usize] as char);
+        result.push(BASE64_CHARS[((triple >> 12) & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            result.push(BASE64_CHARS[((triple >> 6) & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+        if chunk.len() > 2 {
+            result.push(BASE64_CHARS[(triple & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+    }
+    result
+}
+
 fn create_task_elevated(xml_path: &str) {
-    // Escape single quotes for PowerShell string interpolation
-    let safe_path = xml_path.replace('\'', "''");
-    let schtasks_args = format!("/Create /TN \"MicMuteStartup\" /XML \"{}\" /F", safe_path);
-    let safe_args = schtasks_args.replace('\'', "''");
+    let script = format!(
+        "Start-Process -FilePath 'schtasks' -ArgumentList @('/Create', '/TN', 'MicMuteStartup', '/XML', '{}', '/F') -WindowStyle Hidden -Verb RunAs -Wait",
+        xml_path.replace('\'', "''")
+    );
+    let encoded = powershell_encoded_command(&script);
     let _ = Command::new("powershell")
-        .args([
-            "-WindowStyle",
-            "Hidden",
-            "-Command",
-            &format!(
-                "Start-Process schtasks -ArgumentList '{}' -WindowStyle Hidden -Verb RunAs -Wait",
-                safe_args
-            ),
-        ])
+        .args(["-WindowStyle", "Hidden", "-EncodedCommand", &encoded])
         .creation_flags(CREATE_NO_WINDOW)
         .output();
 }
@@ -160,17 +185,10 @@ fn delete_startup_task() {
 }
 
 fn delete_task_elevated() {
-    let schtasks_args = "/Delete /TN ''MicMuteStartup'' /F";
+    let script = "Start-Process -FilePath 'schtasks' -ArgumentList @('/Delete', '/TN', 'MicMuteStartup', '/F') -WindowStyle Hidden -Verb RunAs -Wait";
+    let encoded = powershell_encoded_command(script);
     let _ = Command::new("powershell")
-        .args([
-            "-WindowStyle",
-            "Hidden",
-            "-Command",
-            &format!(
-                "Start-Process schtasks -ArgumentList '{}' -WindowStyle Hidden -Verb RunAs -Wait",
-                schtasks_args
-            ),
-        ])
+        .args(["-WindowStyle", "Hidden", "-EncodedCommand", &encoded])
         .creation_flags(CREATE_NO_WINDOW)
         .output();
 }

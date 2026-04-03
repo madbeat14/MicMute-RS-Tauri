@@ -19,6 +19,11 @@ window.selectedOsdMonitor = null;
 let saveTimeout = null;
 window.isSaving = false;
 
+// Unlisten handles for Tauri event listeners (prevent accumulation on reinit)
+let unlistenStateUpdate = null;
+let unlistenConfigUpdate = null;
+let unlistenStartupChanged = null;
+
 function debouncedSave() {
     if (saveTimeout) clearTimeout(saveTimeout);
     saveTimeout = setTimeout(saveConfig, 300);
@@ -41,13 +46,15 @@ async function init() {
     setupEventListeners();
     if (typeof setupHotkeyPassthrough === 'function') setupHotkeyPassthrough();
 
-    await listen("state-update", e => {
+    if (unlistenStateUpdate) unlistenStateUpdate();
+    unlistenStateUpdate = await listen("state-update", e => {
         window.isMuted = e.payload.is_muted;
         if (typeof updateMuteUI === 'function') updateMuteUI(window.isMuted);
         if (typeof updateVU === 'function') updateVU(e.payload.peak_level);
     });
 
-    await listen("config-update", e => {
+    if (unlistenConfigUpdate) unlistenConfigUpdate();
+    unlistenConfigUpdate = await listen("config-update", e => {
         window.config = e.payload.config;
         applyConfigToUI();
     });
@@ -267,9 +274,13 @@ function setupEventListeners() {
     });
 
     document.getElementById("btn-refresh-devices").addEventListener("click", async () => {
-        window.devices = (await invoke("get_devices")).map(d => ({ id: d.id, name: d.name }));
-        rebuildDeviceSelect();
-        rebuildSyncList();
+        try {
+            window.devices = (await invoke("get_devices")).map(d => ({ id: d.id, name: d.name }));
+            rebuildDeviceSelect();
+            rebuildSyncList();
+        } catch (e) {
+            showDebug("Failed to refresh devices: " + e);
+        }
     });
 
     document.getElementById("sel-device").addEventListener("change", async e => {
@@ -476,7 +487,8 @@ function bindSystemListeners() {
     });
 
     // Keep checkbox in sync when toggled from the tray menu
-    listen("startup-changed", e => {
+    if (unlistenStartupChanged) unlistenStartupChanged();
+    unlistenStartupChanged = listen("startup-changed", e => {
         document.getElementById("chk-startup").checked = e.payload.enabled;
     });
 }
@@ -506,3 +518,10 @@ async function saveConfig() {
 //  Start
 // ──────────────────────────────────
 window.addEventListener("DOMContentLoaded", init);
+
+// Cleanup all Tauri event listeners on window unload to prevent accumulation
+window.addEventListener("beforeunload", () => {
+    if (unlistenStateUpdate) { unlistenStateUpdate(); unlistenStateUpdate = null; }
+    if (unlistenConfigUpdate) { unlistenConfigUpdate(); unlistenConfigUpdate = null; }
+    if (unlistenStartupChanged) { unlistenStartupChanged(); unlistenStartupChanged = null; }
+});

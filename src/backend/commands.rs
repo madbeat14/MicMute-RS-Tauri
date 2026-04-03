@@ -163,8 +163,10 @@ pub async fn update_config(
 #[tauri::command]
 pub async fn get_devices(state: State<'_, Arc<AppState>>) -> Result<Vec<DeviceDto>, String> {
     let _ = state.audio_tx.try_send(AudioMsg::RefreshDevices);
-    // Give it a tiny moment to refresh
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    // Give it a tiny moment to refresh (spawn_blocking avoids blocking the async executor)
+    let _ = tauri::async_runtime::spawn_blocking(|| {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }).await;
     let devs = state.available_devices.lock().clone();
     Ok(devs
         .into_iter()
@@ -255,6 +257,13 @@ pub async fn preview_audio_feedback(
     if payload.len() > MAX_CONFIG_SIZE {
         return Err("Payload too large".into());
     }
+    if !matches!(mode.as_str(), "beep" | "custom") {
+        return Err("Invalid audio mode".into());
+    }
+    if !matches!(key.as_str(), "mute" | "unmute") {
+        return Err("Invalid audio key".into());
+    }
+
     let temp_config: config::AppConfig =
         serde_json::from_str(&payload).map_err(|e| e.to_string())?;
 
@@ -265,7 +274,8 @@ pub async fn preview_audio_feedback(
 /// Open a URL in the default browser. Only http/https URLs are allowed.
 #[tauri::command]
 pub async fn open_url(url: String) -> Result<(), String> {
-    if !url.starts_with("https://") && !url.starts_with("http://") {
+    let url_lower = url.to_lowercase();
+    if !url_lower.starts_with("https://") && !url_lower.starts_with("http://") {
         return Err("Only http/https URLs are allowed".to_string());
     }
     open::that(&url).map_err(|e| e.to_string())
@@ -317,6 +327,10 @@ pub async fn save_overlay_position(
     x: i32,
     y: i32,
 ) -> Result<(), String> {
+    if monitor_key.len() > 64 || !monitor_key.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+        return Err("Invalid monitor key format".into());
+    }
+
     let cfg_to_save = {
         let mut cfg = state.config.lock();
         if let Some(overlay_cfg) = cfg.persistent_overlay.get_mut(&monitor_key) {

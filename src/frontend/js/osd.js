@@ -4,12 +4,15 @@
 // Import the Tauri event listener function
 const { listen } = window.__TAURI__.event;
 
+let unlistenOsdShow = null;
+
 /**
  * Initializes the OSD script by setting up a listener for the "osd-show" event.
  * When the rust backend triggers this event, the OSD will be displayed.
  */
 async function init() {
-    await listen("osd-show", e => {
+    if (unlistenOsdShow) unlistenOsdShow();
+    unlistenOsdShow = await listen("osd-show", e => {
         showOsd(e.payload.is_muted, e.payload.duration, e.payload.opacity);
     });
 }
@@ -51,3 +54,9 @@ function showOsd(isMuted, duration, opacity) {
 
 // Initialize the OSD script once the DOM is fully loaded.
 window.addEventListener("DOMContentLoaded", init);
+
+// Cleanup on window unload to prevent listener accumulation
+window.addEventListener("beforeunload", () => {
+    if (unlistenOsdShow) { unlistenOsdShow(); unlistenOsdShow = null; }
+    if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+});
