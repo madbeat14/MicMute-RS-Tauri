@@ -86,7 +86,7 @@ pub fn is_background_light(hwnd: HWND) -> bool {
 
 /// Samples the screen behind `hwnd` and returns average perceived brightness (0–255).
 /// Returns `None` if the capture fails.
-fn sample_background_brightness(hwnd: HWND) -> Option<u64> {
+pub fn sample_background_brightness(hwnd: HWND) -> Option<u64> {
     unsafe {
         let mut rect = RECT::default();
         if GetWindowRect(hwnd, &mut rect).is_err() {

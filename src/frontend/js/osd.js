@@ -1,8 +1,10 @@
 // OSD (On-Screen Display) window logic
 // This script handles the visual popup that appears briefly when the microphone is muted or unmuted.
 
-// Import the Tauri event listener function
+// Each OSD window filters events by target label to avoid cross-window interference.
 const { listen } = window.__TAURI__.event;
+const { getCurrentWindow } = window.__TAURI__.window;
+const _selfLabel = getCurrentWindow().label;
 
 let unlistenOsdShow = null;
 
@@ -13,6 +15,7 @@ let unlistenOsdShow = null;
 async function init() {
     if (unlistenOsdShow) unlistenOsdShow();
     unlistenOsdShow = await listen("osd-show", e => {
+        if (e.payload.target && e.payload.target !== _selfLabel) return;
         showOsd(e.payload.is_muted, e.payload.duration, e.payload.opacity, e.payload.theme, e.payload.is_system_light);
     });
 }

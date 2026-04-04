@@ -1028,7 +1028,13 @@ pub fn update_tray_icon(app: &AppHandle, is_muted: bool) {
 // ─────────────────────────────────────────
 //  OSD trigger (multi-monitor)
 // ─────────────────────────────────────────
-pub fn trigger_osd(app: &AppHandle, is_muted: bool, cfg: &config::AppConfig, monitors: &[MonitorInfo]) {
+pub fn trigger_osd(app: &AppHandle, is_muted: bool, _cfg: &config::AppConfig, monitors: &[MonitorInfo]) {
+    // Read fresh config from AppState to avoid stale snapshots from the audio channel.
+    let fresh_cfg: config::AppConfig = {
+        let state: tauri::State<std::sync::Arc<AppState>> = app.state();
+        state.config.lock().clone()
+    };
+
     // Sort monitors: primary first (same order as sync_osd_windows).
     let mut sorted: Vec<&MonitorInfo> = monitors.iter().collect();
     sorted.sort_by_key(|m| !m.is_primary);
@@ -1039,7 +1045,7 @@ pub fn trigger_osd(app: &AppHandle, is_muted: bool, cfg: &config::AppConfig, mon
         }
         let label = OSD_LABELS[idx];
         let key = &mon.label_key;
-        let osd_cfg = match cfg.osd.get(key) {
+        let osd_cfg = match fresh_cfg.osd.get(key) {
             Some(c) if c.enabled => c,
             _ => continue,
         };
@@ -1075,8 +1081,22 @@ pub fn trigger_osd(app: &AppHandle, is_muted: bool, cfg: &config::AppConfig, mon
                 mon_pos.y + (y * scale) as i32,
             ));
 
+            // For Auto theme: sample screen pixels BEFORE showing the OSD,
+            // so we capture the actual background, not the OSD's own dark card.
+            // Uses direct brightness sampling (no hysteresis) since OSD is transient.
+            let is_bg_light = if theme == "Auto" {
+                use windows::Win32::Foundation::HWND;
+                osd_win.hwnd().ok()
+                    .and_then(|h| theme::sample_background_brightness(HWND(h.0)))
+                    .map(|b| b > 170)
+                    .unwrap_or_else(|| theme::is_system_light_theme())
+            } else {
+                false
+            };
+
             let _ = osd_win.show();
             let _ = osd_win.set_always_on_top(true);
+
             let _ = osd_win.emit(
                 "osd-show",
                 serde_json::json!({
@@ -1084,7 +1104,8 @@ pub fn trigger_osd(app: &AppHandle, is_muted: bool, cfg: &config::AppConfig, mon
                     "duration": duration,
                     "opacity": opacity,
                     "theme": theme,
-                    "is_system_light": theme::is_system_light_theme(),
+                    "is_system_light": is_bg_light,
+                    "target": label,
                 }),
             );
 
