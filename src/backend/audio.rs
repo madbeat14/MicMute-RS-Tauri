@@ -18,6 +18,7 @@ use std::fs::File;
 use std::io::{BufReader, Cursor};
 use std::time::Duration;
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
+use windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc;
 
 /// RAII guard for COM-allocated memory that must be freed with `CoTaskMemFree`.
 /// Prevents memory leaks if an early return or panic occurs before manual free.
@@ -388,28 +389,18 @@ pub fn get_audio_devices() -> Result<Vec<(String, String)>> {
 
                     if let Ok(store) = device.OpenPropertyStore(STGM_READ)
                         && let Ok(prop_var) = store.GetValue(&PKEY_Device_FriendlyName) {
-                            // SAFETY: We check the variant type (vt) equals VT_LPWSTR (31)
-                            // before accessing the union's string pointer. When vt == VT_LPWSTR,
-                            // the PROPVARIANT data at offset 8 is a valid LPWSTR pointer.
-                            // SAFETY: vt is at offset 0 of PROPVARIANT (u16 discriminant).
-                            // We only access the string pointer when vt == VT_LPWSTR.
-                            // All pointer operations are within the outer unsafe block.
-                            use windows::Win32::System::Variant::VT_LPWSTR;
-                            let vt = (*(&prop_var as *const _ as *const u16)) as u32;
-                            let name_str = if vt == VT_LPWSTR.0 as u32 {
-                                let ptr = &prop_var as *const _ as *const u64;
-                                let pwstr_ptr = *(ptr.add(1) as *const *const u16);
-                                if !pwstr_ptr.is_null() {
-                                    let name_pwstr = windows::core::PWSTR(pwstr_ptr as *mut _);
-                                    name_pwstr.to_string().unwrap_or_else(|_| id_string.clone())
-                                } else {
-                                    id_string.clone()
+                            // Use the safe COM API to extract the string from the PROPVARIANT.
+                            // PropVariantToStringAlloc handles all variant types and layout details,
+                            // avoiding the fragile manual pointer arithmetic that previously caused crashes.
+                            match PropVariantToStringAlloc(&prop_var) {
+                                Ok(pwstr) => {
+                                    let _str_guard = CoTaskMemGuard(pwstr.0);
+                                    name = pwstr.to_string().unwrap_or_else(|_| id_string.clone());
                                 }
-                            } else {
-                                tracing::warn!(vt = vt, "PROPVARIANT is not VT_LPWSTR, skipping name extraction");
-                                id_string.clone()
-                            };
-                            name = name_str;
+                                Err(_) => {
+                                    tracing::warn!("PropVariantToStringAlloc failed, using device ID as name");
+                                }
+                            }
                         }
                     devices.push((id_string, name));
                 }

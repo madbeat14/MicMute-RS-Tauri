@@ -43,12 +43,12 @@ impl HotkeyManager {
         let (sender, receiver) = channel();
         let (rec_sender, record_receiver) = channel();
 
-        HOTKEY_SENDER
-            .set(sender)
-            .expect("HotkeyManager::new must only be called once");
-        RECORD_SENDER
-            .set(rec_sender)
-            .expect("HotkeyManager::new must only be called once");
+        if HOTKEY_SENDER.set(sender).is_err() {
+            tracing::error!("HotkeyManager::new called more than once — HOTKEY_SENDER already set");
+        }
+        if RECORD_SENDER.set(rec_sender).is_err() {
+            tracing::error!("HotkeyManager::new called more than once — RECORD_SENDER already set");
+        }
 
         for (i, &vk) in vks.iter().take(3).enumerate() {
             TARGET_VKS[i].store(vk, Ordering::SeqCst);

@@ -53,25 +53,37 @@ pub fn is_system_light_theme() -> bool {
     false
 }
 
+/// Per-window hysteresis state for background brightness detection.
+/// Prevents rapid icon theme toggling when the background brightness is near
+/// the threshold boundary.
+static PER_WINDOW_LIGHT_STATE: std::sync::OnceLock<
+    parking_lot::Mutex<std::collections::HashMap<isize, bool>>,
+> = std::sync::OnceLock::new();
+
+fn get_per_window_state() -> &'static parking_lot::Mutex<std::collections::HashMap<isize, bool>> {
+    PER_WINDOW_LIGHT_STATE.get_or_init(|| parking_lot::Mutex::new(std::collections::HashMap::new()))
+}
+
 /// Captures the screen area behind the given window and determines if it's light or dark.
 /// Returns true if the background is light, false if dark.
 /// Used for auto theme detection on the overlay icon.
 ///
-/// Uses hysteresis (two thresholds) to prevent rapid toggling when the background
-/// brightness is near the boundary. White icons are the default; dark icons only
-/// appear on very bright backgrounds.
+/// Uses per-window hysteresis (two thresholds) to prevent rapid toggling when the
+/// background brightness is near the boundary. Each overlay window on different
+/// monitors tracks its own state independently. White icons are the default; dark
+/// icons only appear on very bright backgrounds.
 pub fn is_background_light(hwnd: HWND) -> bool {
     use crate::constants::{OVERLAY_BRIGHT_THRESHOLD, OVERLAY_DIM_THRESHOLD};
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    static LAST_IS_LIGHT: AtomicBool = AtomicBool::new(false);
 
     let avg_brightness = match sample_background_brightness(hwnd) {
         Some(b) => b,
         None => return is_system_light_theme(),
     };
 
-    let was_light = LAST_IS_LIGHT.load(Ordering::Relaxed);
+    let hwnd_key = hwnd.0 as isize;
+    let mut state_map = get_per_window_state().lock();
+    let was_light = *state_map.get(&hwnd_key).unwrap_or(&false);
+
     let is_light = if was_light {
         // Currently dark icons — stay that way unless brightness drops enough
         avg_brightness > OVERLAY_DIM_THRESHOLD
@@ -80,7 +92,7 @@ pub fn is_background_light(hwnd: HWND) -> bool {
         avg_brightness > OVERLAY_BRIGHT_THRESHOLD
     };
 
-    LAST_IS_LIGHT.store(is_light, Ordering::Relaxed);
+    state_map.insert(hwnd_key, is_light);
     is_light
 }
 

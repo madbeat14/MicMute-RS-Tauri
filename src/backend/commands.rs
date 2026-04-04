@@ -288,13 +288,19 @@ pub fn get_app_version() -> String {
 }
 
 /// Triggers a file picker via Tauri's dialog plugin.
+/// Uses spawn_blocking to avoid blocking the async runtime while the user
+/// interacts with the native file dialog.
 #[tauri::command]
 pub async fn pick_audio_file(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    let file_path = app.dialog()
-        .file()
-        .add_filter("Audio Files", &["wav", "mp3", "ogg"])
-        .blocking_pick_file();
-    
+    let file_path = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter("Audio Files", &["wav", "mp3", "ogg"])
+            .blocking_pick_file()
+    })
+    .await
+    .map_err(|e| format!("File picker task failed: {}", e))?;
+
     Ok(file_path.map(|p| p.to_string()))
 }
 

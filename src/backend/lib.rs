@@ -275,11 +275,11 @@ struct OsdHideMsg {
 }
 
 impl OsdTimer {
-    fn new() -> Self {
+    fn new() -> Option<Self> {
         let generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let gen_clone = Arc::clone(&generation);
         let (tx, rx) = std_mpsc::channel::<OsdHideMsg>();
-        std::thread::Builder::new()
+        match std::thread::Builder::new()
             .name("osd-timer".into())
             .spawn(move || {
                 while let Ok(mut msg) = rx.recv() {
@@ -294,9 +294,13 @@ impl OsdTimer {
                         let _ = msg.win.hide();
                     }
                 }
-            })
-            .expect("failed to spawn OSD timer thread");
-        Self { tx, generation }
+            }) {
+            Ok(_) => Some(Self { tx, generation }),
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to spawn OSD timer thread");
+                None
+            }
+        }
     }
 
     fn schedule_hide(&self, win: tauri::WebviewWindow, delay: std::time::Duration) {
@@ -435,7 +439,7 @@ fn spawn_audio_worker(
     rx: std_mpsc::Receiver<AudioMsg>,
     initial_device_id: Option<String>,
 ) {
-    std::thread::Builder::new()
+    match std::thread::Builder::new()
         .name("audio-worker".into())
         .spawn(move || {
             // Initialize COM for this thread (Multithreaded Apartment)
@@ -465,10 +469,41 @@ fn spawn_audio_worker(
 
             let mut _active_sink: Option<rodio::Sink> = None;
             let mut last_peak_poll = std::time::Instant::now();
+            let mut consecutive_com_errors: u32 = 0;
+            const MAX_COM_ERRORS_BEFORE_RECONNECT: u32 = 3;
             let mut current_muted = controller.as_ref().map(|c| c.is_muted().unwrap_or(false)).unwrap_or(false);
             {
                 *state.is_muted.lock() = current_muted;
             }
+
+            // Helper: attempt to reconnect the audio controller using the current config device ID.
+            let try_reconnect = |controller: &mut Option<audio::AudioController>, state: &Arc<AppState>| -> bool {
+                let device_id = state.config.lock().device_id.clone();
+                tracing::warn!("Audio worker: attempting COM reconnection");
+                match audio::AudioController::new(device_id.as_ref()) {
+                    Ok(new_ctrl) => {
+                        *controller = Some(new_ctrl);
+                        tracing::info!("Audio worker: COM reconnection succeeded");
+                        true
+                    }
+                    Err(e) => {
+                        tracing::error!(error = ?e, "Audio worker: COM reconnection failed");
+                        // Try default device as last resort
+                        match audio::AudioController::new(None) {
+                            Ok(fallback) => {
+                                *controller = Some(fallback);
+                                tracing::info!("Audio worker: COM reconnection succeeded with default device");
+                                true
+                            }
+                            Err(e2) => {
+                                tracing::error!(error = ?e2, "Audio worker: COM reconnection with default also failed");
+                                *controller = None;
+                                false
+                            }
+                        }
+                    }
+                }
+            };
 
             loop {
                 // Check for messages with a short timeout to allow for periodic peak polling
@@ -479,6 +514,7 @@ fn spawn_audio_worker(
                             if let Some(ref mut c) = controller {
                                 match c.toggle_mute(&cfg) {
                                     Ok(new_muted) => {
+                                        consecutive_com_errors = 0;
                                         tracing::info!(muted = new_muted, "Audio worker: mute toggled");
                                         current_muted = new_muted;
                                         let peak = c.get_peak_value().unwrap_or(0.0);
@@ -490,35 +526,60 @@ fn spawn_audio_worker(
                                         );
                                     }
                                     Err(e) => {
-                                        tracing::error!(error = ?e, "Audio worker: toggle_mute COM call failed");
+                                        consecutive_com_errors += 1;
+                                        tracing::error!(error = ?e, consecutive = consecutive_com_errors, "Audio worker: toggle_mute COM call failed");
+                                        if consecutive_com_errors >= MAX_COM_ERRORS_BEFORE_RECONNECT
+                                            && try_reconnect(&mut controller, &state) {
+                                                consecutive_com_errors = 0;
+                                                current_muted = controller.as_ref().map(|c| c.is_muted().unwrap_or(false)).unwrap_or(false);
+                                                *state.is_muted.lock() = current_muted;
+                                        }
                                     }
                                 }
                             } else {
-                                tracing::error!("Audio worker: ToggleMute received but controller is None");
+                                tracing::error!("Audio worker: ToggleMute received but controller is None — attempting reconnect");
+                                if try_reconnect(&mut controller, &state) {
+                                    consecutive_com_errors = 0;
+                                    current_muted = controller.as_ref().map(|c| c.is_muted().unwrap_or(false)).unwrap_or(false);
+                                    *state.is_muted.lock() = current_muted;
+                                }
                             }
                         }
                         AudioMsg::SetMute(mute, cfg) => {
-                            if let Some(ref mut c) = controller
-                                && c.set_mute(mute, &cfg).is_ok() {
-                                    current_muted = mute;
-                                    let peak = c.get_peak_value().unwrap_or(0.0);
-                                    finalize_mute_change(&app, &state, mute, peak, &cfg);
-                                    _active_sink =
-                                        audio::play_feedback(c.stream_handle().as_ref(), mute, &cfg);
+                            if let Some(ref mut c) = controller {
+                                match c.set_mute(mute, &cfg) {
+                                    Ok(()) => {
+                                        consecutive_com_errors = 0;
+                                        current_muted = mute;
+                                        let peak = c.get_peak_value().unwrap_or(0.0);
+                                        finalize_mute_change(&app, &state, mute, peak, &cfg);
+                                        _active_sink =
+                                            audio::play_feedback(c.stream_handle().as_ref(), mute, &cfg);
+                                    }
+                                    Err(e) => {
+                                        consecutive_com_errors += 1;
+                                        tracing::error!(error = ?e, consecutive = consecutive_com_errors, "Audio worker: set_mute COM call failed");
+                                        if consecutive_com_errors >= MAX_COM_ERRORS_BEFORE_RECONNECT
+                                            && try_reconnect(&mut controller, &state) {
+                                                consecutive_com_errors = 0;
+                                        }
+                                    }
                                 }
+                            }
                         }
                         AudioMsg::SetDevice(id) => {
-                            if let Ok(new_ctrl) = audio::AudioController::new(id.as_ref()) {
-                                controller = Some(new_ctrl);
-                                current_muted = controller.as_ref().map(|c| c.is_muted().unwrap_or(false)).unwrap_or(false);
-                                {
+                            match audio::AudioController::new(id.as_ref()) {
+                                Ok(new_ctrl) => {
+                                    controller = Some(new_ctrl);
+                                    consecutive_com_errors = 0;
+                                    current_muted = controller.as_ref().map(|c| c.is_muted().unwrap_or(false)).unwrap_or(false);
                                     *state.is_muted.lock() = current_muted;
-                                }
-                                // Refresh devices list after switching
-                                if let Ok(devices) = audio::get_audio_devices() {
-                                    {
+                                    if let Ok(devices) = audio::get_audio_devices() {
                                         *state.available_devices.lock() = devices;
                                     }
+                                }
+                                Err(e) => {
+                                    tracing::error!(error = ?e, "Audio worker: SetDevice failed");
                                 }
                             }
                         }
@@ -541,23 +602,39 @@ fn spawn_audio_worker(
                     Err(std_mpsc::RecvTimeoutError::Timeout) => {
                         // Periodic peak level polling (~10Hz)
                         if last_peak_poll.elapsed() >= std::time::Duration::from_millis(100) {
-                            if let Some(ref c) = controller
-                                && let Ok(peak) = c.get_peak_value() {
-                                    state.peak_level.store(
-                                        (peak * 10000.0) as u32,
-                                        std::sync::atomic::Ordering::Relaxed,
-                                    );
-                                    // Emit state update periodically for VU meters
-                                    emit_state(&app, current_muted, peak);
+                            if let Some(ref c) = controller {
+                                match c.get_peak_value() {
+                                    Ok(peak) => {
+                                        consecutive_com_errors = 0;
+                                        state.peak_level.store(
+                                            (peak * 10000.0) as u32,
+                                            std::sync::atomic::Ordering::Relaxed,
+                                        );
+                                        emit_state(&app, current_muted, peak);
+                                    }
+                                    Err(_) => {
+                                        consecutive_com_errors += 1;
+                                        if consecutive_com_errors >= MAX_COM_ERRORS_BEFORE_RECONNECT {
+                                            tracing::warn!("Audio worker: repeated peak poll failures — reconnecting");
+                                            if try_reconnect(&mut controller, &state) {
+                                                consecutive_com_errors = 0;
+                                                current_muted = controller.as_ref().map(|c| c.is_muted().unwrap_or(false)).unwrap_or(false);
+                                                *state.is_muted.lock() = current_muted;
+                                            }
+                                        }
+                                    }
                                 }
+                            }
                             last_peak_poll = std::time::Instant::now();
                         }
                     }
                     Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
                 }
             }
-        })
-        .expect("failed to spawn audio worker thread");
+        }) {
+        Ok(_) => tracing::debug!("Audio worker thread spawned"),
+        Err(e) => tracing::error!(error = %e, "Failed to spawn audio worker thread — audio features disabled"),
+    }
 }
 
 fn finalize_mute_change(
@@ -993,7 +1070,10 @@ pub fn run() {
             commands::get_window_monitor_key,
         ])
         .run(tauri::generate_context!())
-        .expect("fatal error while running tauri application");
+        .unwrap_or_else(|e| {
+            tracing::error!(error = %e, "Fatal error while running Tauri application");
+            eprintln!("FATAL: Tauri application failed: {e}");
+        });
 }
 
 // ─────────────────────────────────────────
@@ -1112,7 +1192,19 @@ pub fn trigger_osd(app: &AppHandle, is_muted: bool, _cfg: &config::AppConfig, mo
             // Schedule hide via per-monitor timer.
             let label_owned = label.to_string();
             let mut timers = get_osd_timers().lock();
-            let timer = timers.entry(label_owned).or_insert_with(OsdTimer::new);
+            let timer = timers.entry(label_owned.clone()).or_insert_with(|| {
+                match OsdTimer::new() {
+                    Some(t) => t,
+                    None => {
+                        tracing::error!(label = %label_owned, "OSD timer creation failed — hide will not fire");
+                        // Return a dummy timer whose schedule_hide will silently fail
+                        // because the channel receiver was never spawned.
+                        let generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
+                        let (tx, _rx) = std_mpsc::channel::<OsdHideMsg>();
+                        OsdTimer { tx, generation }
+                    }
+                }
+            });
             timer.schedule_hide(osd_win, std::time::Duration::from_millis(duration as u64));
         }
     }

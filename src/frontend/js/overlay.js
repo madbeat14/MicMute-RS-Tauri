@@ -126,21 +126,29 @@ function setupDragDetection() {
     dragMousedownHandler = () => {
         if (dragTimeout) clearTimeout(dragTimeout);
         isDragging = true;
-        dragTimeout = setTimeout(() => {
-            if (isDragging) {
-                isDragging = false;
-                saveCurrentPosition();
-            }
-        }, 500);
     };
-    dragMouseupHandler = dragMousedownHandler;
+    dragMouseupHandler = () => {
+        if (isDragging) {
+            isDragging = false;
+            if (dragTimeout) clearTimeout(dragTimeout);
+            // Save position after drag ends with a short debounce
+            dragTimeout = setTimeout(() => {
+                saveCurrentPosition();
+            }, 300);
+        }
+    };
 
     let lastMoveTime = 0;
     dragMousemoveHandler = () => {
+        if (!isDragging) return;
         const now = Date.now();
         if (now - lastMoveTime >= 50) {
             lastMoveTime = now;
-            dragMousedownHandler();
+            // Debounce: reset save timer on each move, save after drag settles
+            if (dragTimeout) clearTimeout(dragTimeout);
+            dragTimeout = setTimeout(() => {
+                saveCurrentPosition();
+            }, 500);
         }
     };
 
