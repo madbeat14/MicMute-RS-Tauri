@@ -9,7 +9,8 @@
         "overlay",
         "osd",
         "overlay-*",
-        "osd-*"
+        "osd-*",
+        "about"
     ],
     "permissions": [
         "core:default",

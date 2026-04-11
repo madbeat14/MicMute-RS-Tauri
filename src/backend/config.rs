@@ -228,7 +228,7 @@ impl AppConfig {
     }
 
     /// Clamp and sanitize config values to valid ranges.
-    fn validate(&mut self) {
+    pub(crate) fn validate(&mut self) {
         self.afk.timeout = self
             .afk
             .timeout
@@ -245,6 +245,16 @@ impl AppConfig {
             if osd_cfg.size == 0 {
                 osd_cfg.size = constants::DEFAULT_OSD_SIZE;
             }
+        }
+
+        for beep_cfg in self.beep_mode_configs.values_mut() {
+            beep_cfg.freq = beep_cfg.freq.clamp(20, 20000);
+            beep_cfg.duration = beep_cfg.duration.clamp(10, 5000);
+            beep_cfg.count = beep_cfg.count.clamp(1, 10);
+        }
+
+        for sound_cfg in self.sound_mode_configs.values_mut() {
+            sound_cfg.volume = sound_cfg.volume.clamp(0, 100);
         }
 
         if self.audio_mode != "beep" && self.audio_mode != "custom" {

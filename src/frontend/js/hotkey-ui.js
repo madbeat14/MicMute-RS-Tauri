@@ -125,7 +125,7 @@ async function startRecording(key) {
 
     recordingPollTimer = setInterval(async () => {
         const vk = await window.__TAURI__.core.invoke("get_recorded_hotkey");
-        if (vk !== null && vk !== undefined) {
+        if (vk !== null && vk !== undefined && vk !== 0) {
             finishRecording(key, vk);
         }
     }, 100);
@@ -175,6 +175,7 @@ function jsEventToVK(e) {
 
 function setupHotkeyPassthrough() {
     document.addEventListener('keydown', async (e) => {
+        if (e.repeat) return;
         if (!window.config) return;
         if (recordingKey) {
             const vk = jsEventToVK(e);

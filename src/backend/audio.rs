@@ -77,7 +77,10 @@ impl AudioController {
 
         unsafe {
             // Ensure COM is initialized for the thread
-            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
+            if hr.is_err() {
+                tracing::warn!(hresult = ?hr, "CoInitializeEx: COM may already be initialized with a different apartment model");
+            }
 
             let enumerator: IMMDeviceEnumerator =
                 CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;

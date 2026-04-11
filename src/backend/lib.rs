@@ -31,6 +31,8 @@ pub enum AudioMsg {
     PlayPreview(String, String, config::AppConfig),
     /// Refresh the list of available audio devices.
     RefreshDevices,
+    /// Refresh devices and notify the caller when done.
+    RefreshDevicesSync(std_mpsc::SyncSender<()>),
 }
 
 // ─────────────────────────────────────────
@@ -444,10 +446,13 @@ fn spawn_audio_worker(
         .spawn(move || {
             // Initialize COM for this thread (Multithreaded Apartment)
             unsafe {
-                let _ = windows::Win32::System::Com::CoInitializeEx(
+                let hr = windows::Win32::System::Com::CoInitializeEx(
                     None,
                     windows::Win32::System::Com::COINIT_MULTITHREADED,
                 );
+                if hr.is_err() {
+                    tracing::warn!(hresult = ?hr, "CoInitializeEx: COM may already be initialized with a different apartment model on audio worker thread");
+                }
             }
 
             let mut controller = match audio::AudioController::new(initial_device_id.as_ref()) {
@@ -597,6 +602,12 @@ fn spawn_audio_worker(
                             if let Ok(devices) = audio::get_audio_devices() {
                                 *state.available_devices.lock() = devices;
                             }
+                        }
+                        AudioMsg::RefreshDevicesSync(tx) => {
+                            if let Ok(devices) = audio::get_audio_devices() {
+                                *state.available_devices.lock() = devices;
+                            }
+                            let _ = tx.send(());
                         }
                     },
                     Err(std_mpsc::RecvTimeoutError::Timeout) => {

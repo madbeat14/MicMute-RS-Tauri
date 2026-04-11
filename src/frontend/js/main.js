@@ -186,7 +186,7 @@ function applyConfigToUI() {
 
     invoke("get_run_on_startup_cmd").then(b => {
         document.getElementById("chk-startup").checked = b;
-    });
+    }).catch(e => { if (typeof showDebug === 'function') showDebug("Failed to get startup state: " + e); });
     document.getElementById("chk-afk").checked = window.config.afk.enabled;
     setSlider("slider-afk-timeout", window.config.afk.timeout, "afk-timeout-val");
     updateSubOptions("chk-afk", "afk-timeout-row");
@@ -365,7 +365,7 @@ function setupEventListeners() {
 
     document.getElementById("link-help").addEventListener("click", e => {
         e.preventDefault();
-        invoke("open_url", { url: "https://github.com/madbeat14/MicMute-RS-Tauri" });
+        invoke("open_url", { url: "https://github.com/madbeat14/MicMute-RS-Tauri" }).catch(() => {});
     });
 }
 
@@ -544,15 +544,20 @@ function bindSystemListeners() {
     bindSlider("slider-afk-timeout", "afk-timeout-val", v => window.config.afk.timeout = v);
 
     document.getElementById("chk-startup").addEventListener("change", async e => {
-        const actual = await invoke("set_run_on_startup_cmd", { enable: e.target.checked });
-        e.target.checked = actual;
+        try {
+            const actual = await invoke("set_run_on_startup_cmd", { enable: e.target.checked });
+            e.target.checked = actual;
+        } catch (err) {
+            if (typeof showDebug === 'function') showDebug("Failed to set startup: " + err);
+            e.target.checked = !e.target.checked; // revert checkbox on failure
+        }
     });
 
     // Keep checkbox in sync when toggled from the tray menu
-    if (unlistenStartupChanged) unlistenStartupChanged();
-    unlistenStartupChanged = listen("startup-changed", e => {
+    if (typeof unlistenStartupChanged === 'function') unlistenStartupChanged();
+    listen("startup-changed", e => {
         document.getElementById("chk-startup").checked = e.payload.enabled;
-    });
+    }).then(fn => { unlistenStartupChanged = fn; });
 }
 
 // ──────────────────────────────────

@@ -9,6 +9,7 @@ use std::sync::Arc;
 use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
+use std::sync::mpsc as std_mpsc;
 use crate::{AppState, AudioMsg, config, startup};
 
 /// Response structure for application state (mute + peak level).
@@ -95,6 +96,8 @@ pub async fn update_config(
         }
     };
 
+    new_config.validate();
+
     // Preserve per-monitor overlay positions
     {
         let mut cfg = state.config.lock();
@@ -162,10 +165,11 @@ pub async fn update_config(
 /// Enumerate audio capture devices.
 #[tauri::command]
 pub async fn get_devices(state: State<'_, Arc<AppState>>) -> Result<Vec<DeviceDto>, String> {
-    let _ = state.audio_tx.try_send(AudioMsg::RefreshDevices);
-    // Give it a tiny moment to refresh (spawn_blocking avoids blocking the async executor)
-    let _ = tauri::async_runtime::spawn_blocking(|| {
-        std::thread::sleep(std::time::Duration::from_millis(50));
+    let (tx, rx) = std_mpsc::sync_channel::<()>(1);
+    let _ = state.audio_tx.try_send(AudioMsg::RefreshDevicesSync(tx));
+    // Wait for the audio worker to finish refreshing (up to 500ms)
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        let _ = rx.recv_timeout(std::time::Duration::from_millis(500));
     }).await;
     let devs = state.available_devices.lock().clone();
     Ok(devs
