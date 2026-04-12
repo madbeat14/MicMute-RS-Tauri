@@ -480,6 +480,8 @@ fn spawn_audio_worker(
             {
                 *state.is_muted.lock() = current_muted;
             }
+            // Tracks what the tray icon currently displays; None = not yet synced (forces sync on first peak poll)
+            let mut last_tray_muted: Option<bool> = None;
 
             // Helper: attempt to reconnect the audio controller using the current config device ID.
             let try_reconnect = |controller: &mut Option<audio::AudioController>, state: &Arc<AppState>| -> bool {
@@ -522,6 +524,7 @@ fn spawn_audio_worker(
                                         consecutive_com_errors = 0;
                                         tracing::info!(muted = new_muted, "Audio worker: mute toggled");
                                         current_muted = new_muted;
+                                        last_tray_muted = Some(new_muted); // finalize_mute_change handles tray update
                                         let peak = c.get_peak_value().unwrap_or(0.0);
                                         finalize_mute_change(&app, &state, new_muted, peak, &cfg);
                                         _active_sink = audio::play_feedback(
@@ -538,6 +541,7 @@ fn spawn_audio_worker(
                                                 consecutive_com_errors = 0;
                                                 current_muted = controller.as_ref().map(|c| c.is_muted().unwrap_or(false)).unwrap_or(false);
                                                 *state.is_muted.lock() = current_muted;
+                                                last_tray_muted = None; // force tray sync on next poll
                                         }
                                     }
                                 }
@@ -547,6 +551,7 @@ fn spawn_audio_worker(
                                     consecutive_com_errors = 0;
                                     current_muted = controller.as_ref().map(|c| c.is_muted().unwrap_or(false)).unwrap_or(false);
                                     *state.is_muted.lock() = current_muted;
+                                    last_tray_muted = None; // force tray sync on next poll
                                 }
                             }
                         }
@@ -556,6 +561,7 @@ fn spawn_audio_worker(
                                     Ok(()) => {
                                         consecutive_com_errors = 0;
                                         current_muted = mute;
+                                        last_tray_muted = Some(mute); // finalize_mute_change handles tray update
                                         let peak = c.get_peak_value().unwrap_or(0.0);
                                         finalize_mute_change(&app, &state, mute, peak, &cfg);
                                         _active_sink =
@@ -579,6 +585,7 @@ fn spawn_audio_worker(
                                     consecutive_com_errors = 0;
                                     current_muted = controller.as_ref().map(|c| c.is_muted().unwrap_or(false)).unwrap_or(false);
                                     *state.is_muted.lock() = current_muted;
+                                    last_tray_muted = None; // force tray sync on next poll after device switch
                                     if let Ok(devices) = audio::get_audio_devices() {
                                         *state.available_devices.lock() = devices;
                                     }
@@ -617,11 +624,30 @@ fn spawn_audio_worker(
                                 match c.get_peak_value() {
                                     Ok(peak) => {
                                         consecutive_com_errors = 0;
+                                        // Detect external mute changes (e.g. Windows Sound Settings)
+                                        let os_muted = c.is_muted().unwrap_or(current_muted);
+                                        if os_muted != current_muted {
+                                            tracing::info!(
+                                                old = current_muted, new = os_muted,
+                                                "Audio worker: external mute change detected"
+                                            );
+                                            current_muted = os_muted;
+                                            *state.is_muted.lock() = current_muted;
+                                        }
                                         state.peak_level.store(
                                             (peak * 10000.0) as u32,
                                             std::sync::atomic::Ordering::Relaxed,
                                         );
                                         emit_state(&app, current_muted, peak);
+                                        // Sync tray icon whenever displayed state diverges from actual state
+                                        if last_tray_muted != Some(current_muted) {
+                                            let tray_app = app.clone();
+                                            let muted = current_muted;
+                                            let _ = app.run_on_main_thread(move || {
+                                                update_tray_icon(&tray_app, muted);
+                                            });
+                                            last_tray_muted = Some(current_muted);
+                                        }
                                     }
                                     Err(_) => {
                                         consecutive_com_errors += 1;
@@ -631,6 +657,7 @@ fn spawn_audio_worker(
                                                 consecutive_com_errors = 0;
                                                 current_muted = controller.as_ref().map(|c| c.is_muted().unwrap_or(false)).unwrap_or(false);
                                                 *state.is_muted.lock() = current_muted;
+                                                last_tray_muted = None; // force tray sync on next poll
                                             }
                                         }
                                     }
@@ -939,12 +966,14 @@ pub fn run() {
                 // ── System tray ──
                 tracing::debug!("Initializing system tray");
                 let is_light = theme::is_system_light_theme();
-                let tray_icon = load_tray_icon(false, is_light).ok();
+                let initial_muted = *state.is_muted.lock();
+                let tray_icon = load_tray_icon(initial_muted, is_light).ok();
                 let tray_menu = build_tray_menu(app, &cfg, &devices).ok();
 
                 let version = env!("CARGO_PKG_VERSION");
+                let tray_initial_state = if initial_muted { "Muted" } else { "Unmuted" };
                 let mut tray_builder = TrayIconBuilder::with_id("main")
-                    .tooltip(&format!("MicMuteRs v{version} — Unmuted"));
+                    .tooltip(&format!("MicMuteRs v{version} — {tray_initial_state}"));
 
                 if let Some(icon) = tray_icon {
                     tray_builder = tray_builder.icon(icon);
