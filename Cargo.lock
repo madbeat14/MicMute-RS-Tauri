@@ -2091,7 +2091,7 @@ dependencies = [
 
 [[package]]
 name = "mic-mute-rs"
-version = "0.1.13"
+version = "0.1.15"
 dependencies = [
  "directories",
  "open",
