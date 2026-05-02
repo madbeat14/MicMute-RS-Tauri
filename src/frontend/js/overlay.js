@@ -8,15 +8,11 @@ const { listen } = window.__TAURI__.event;
 let config = null;
 let isMuted = false;
 let vuPollTimer = null;
-let isDragging = false;
-let dragTimeout = null;
 let topmostIntervalId = null;
-let dragMousedownHandler = null;
-let dragMouseupHandler = null;
-let dragMousemoveHandler = null;
 
 let unlistenState = null;
 let unlistenConfig = null;
+let unlistenMoved = null;
 
 const { getCurrentWindow } = window.__TAURI__.window;
 const _selfWin = getCurrentWindow();
@@ -108,59 +104,35 @@ async function init() {
         _selfWin.setAlwaysOnTop(true).catch(() => {});
     }, topmostInterval);
 
-    setupDragDetection();
+    // Listen for native window-move events (fires for OS drags, programmatic moves, etc.)
+    // Debounced because Windows fires onMoved continuously during a drag.
+    if (unlistenMoved) { unlistenMoved(); unlistenMoved = null; }
+    let movedDebounce = null;
+    unlistenMoved = await _selfWin.onMoved(() => {
+        if (movedDebounce) clearTimeout(movedDebounce);
+        movedDebounce = setTimeout(() => {
+            saveCurrentPosition();
+        }, 300);
+    });
+
     updateDragRegion();
 }
+
 function updateDragRegion() {
     const myCfg = getMyConfig();
     if (!myCfg) return;
     document.body.style.webkitAppRegion = myCfg.locked ? 'no-drag' : 'drag';
 }
 
-function setupDragDetection() {
-    // Remove old handlers if reinitializing
-    if (dragMousedownHandler) document.removeEventListener("mousedown", dragMousedownHandler);
-    if (dragMouseupHandler) document.removeEventListener("mouseup", dragMouseupHandler);
-    if (dragMousemoveHandler) document.removeEventListener("mousemove", dragMousemoveHandler);
-
-    dragMousedownHandler = () => {
-        if (dragTimeout) clearTimeout(dragTimeout);
-        isDragging = true;
-    };
-    dragMouseupHandler = () => {
-        if (isDragging) {
-            isDragging = false;
-            if (dragTimeout) clearTimeout(dragTimeout);
-            // Save position after drag ends with a short debounce
-            dragTimeout = setTimeout(() => {
-                saveCurrentPosition();
-            }, 300);
-        }
-    };
-
-    let lastMoveTime = 0;
-    dragMousemoveHandler = () => {
-        if (!isDragging) return;
-        const now = Date.now();
-        if (now - lastMoveTime >= 50) {
-            lastMoveTime = now;
-            // Debounce: reset save timer on each move, save after drag settles
-            if (dragTimeout) clearTimeout(dragTimeout);
-            dragTimeout = setTimeout(() => {
-                saveCurrentPosition();
-            }, 500);
-        }
-    };
-
-    document.addEventListener("mousedown", dragMousedownHandler);
-    document.addEventListener("mouseup", dragMouseupHandler);
-    document.addEventListener("mousemove", dragMousemoveHandler);
-}
 
 async function saveCurrentPosition() {
     if (!monitorKey) return;
     try {
         const position = await _selfWin.outerPosition();
+        // Suppress echo loops: if the position already matches config (e.g. after
+        // sync_overlay_windows called set_position), skip the backend invoke.
+        const myCfg = getMyConfig();
+        if (myCfg && myCfg.x === position.x && myCfg.y === position.y) return;
         await invoke("save_overlay_position", { monitorKey, x: position.x, y: position.y });
     } catch (e) {
         console.error("Failed to save overlay position:", e);
@@ -224,9 +196,6 @@ window.addEventListener("beforeunload", () => {
     if (topmostIntervalId !== null) { clearInterval(topmostIntervalId); topmostIntervalId = null; }
     if (unlistenState) { unlistenState(); unlistenState = null; }
     if (unlistenConfig) { unlistenConfig(); unlistenConfig = null; }
-    if (dragMousedownHandler) document.removeEventListener("mousedown", dragMousedownHandler);
-    if (dragMouseupHandler) document.removeEventListener("mouseup", dragMouseupHandler);
-    if (dragMousemoveHandler) document.removeEventListener("mousemove", dragMousemoveHandler);
-    if (dragTimeout) { clearTimeout(dragTimeout); dragTimeout = null; }
+    if (unlistenMoved) { unlistenMoved(); unlistenMoved = null; }
 });
 
