@@ -22,15 +22,12 @@ const _label = _selfWin.label;
 let monitorKey = null;
 
 /**
- * Returns the OverlayConfig entry for this window's monitor key, with
- * fallback to "primary" and then to the first available entry.
+ * Returns the OverlayConfig entry for this window's monitor key.
+ * Strict — no cross-monitor fallback. Returns null if not yet configured.
  */
 function getMyConfig() {
-    if (!config || !config.persistent_overlay) return null;
-    return config.persistent_overlay[monitorKey]
-        || config.persistent_overlay['primary']
-        || Object.values(config.persistent_overlay)[0]
-        || null;
+    if (!config || !config.persistent_overlay || !monitorKey) return null;
+    return config.persistent_overlay[monitorKey] || null;
 }
 
 async function init() {
@@ -73,7 +70,9 @@ async function init() {
     } catch (e) {
         console.error("overlay: failed to get monitor key:", e);
     }
-    if (!monitorKey) monitorKey = "primary"; // fallback
+    // No "primary" fallback: if the backend hasn't mapped this window yet,
+    // leave monitorKey null and let getMyConfig return null. Falling back to
+    // primary causes secondary windows to read the wrong monitor's config.
 
     try {
         config = await invoke("get_config");
