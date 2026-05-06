@@ -188,29 +188,40 @@ pub fn sync_overlay_windows(app: &AppHandle, config: &config::AppConfig, monitor
         let key = &mon.label_key;
         map.insert(label.to_string(), key.clone());
 
-        let overlay_cfg = config.persistent_overlay.get(key)
-            .or_else(|| config.persistent_overlay.get("primary"))
-            .cloned()
-            .unwrap_or_default();
+        // Strict per-monitor: missing entry or disabled ⇒ hide. Never inherit
+        // primary's config — that breaks per-monitor independence.
+        let overlay_cfg = match config.persistent_overlay.get(key) {
+            Some(c) if c.enabled => c.clone(),
+            _ => {
+                if let Some(win) = app.get_webview_window(label) {
+                    let _ = win.hide();
+                }
+                continue;
+            }
+        };
 
         if let Some(win) = app.get_webview_window(label) {
-            if overlay_cfg.enabled {
-                apply_overlay_config(&win, &overlay_cfg);
-                if overlay_cfg.x != 0 || overlay_cfg.y != 0 {
-                    let _ = win.set_position(tauri::PhysicalPosition::new(
-                        overlay_cfg.x,
-                        overlay_cfg.y,
-                    ));
-                } else {
-                    let _ = win.set_position(tauri::PhysicalPosition::new(
-                        mon.position.x + 100,
-                        mon.position.y + 100,
-                    ));
-                }
-                let _ = win.show();
+            apply_overlay_config(&win, &overlay_cfg);
+
+            // Snap back to this monitor if the saved position lies outside its
+            // physical bounds — protects against stale coordinates left over
+            // from the older cross-monitor-inheritance bug.
+            let mon_x_min = mon.position.x;
+            let mon_y_min = mon.position.y;
+            let mon_x_max = mon.position.x + mon.size.width as i32;
+            let mon_y_max = mon.position.y + mon.size.height as i32;
+            let in_bounds = overlay_cfg.x >= mon_x_min
+                && overlay_cfg.x < mon_x_max
+                && overlay_cfg.y >= mon_y_min
+                && overlay_cfg.y < mon_y_max;
+
+            let (px, py) = if in_bounds {
+                (overlay_cfg.x, overlay_cfg.y)
             } else {
-                let _ = win.hide();
-            }
+                (mon.position.x + 100, mon.position.y + 100)
+            };
+            let _ = win.set_position(tauri::PhysicalPosition::new(px, py));
+            let _ = win.show();
         }
     }
 
@@ -243,11 +254,10 @@ pub fn sync_osd_windows(app: &AppHandle, config: &config::AppConfig, monitors: &
         let key = &mon.label_key;
         map.insert(label.to_string(), key.clone());
 
-        let osd_cfg = config.osd.get(key)
-            .or_else(|| config.osd.get("primary"))
-            .cloned()
-            .unwrap_or_default();
-        if !osd_cfg.enabled
+        // Strict per-monitor: hide when missing or disabled. No fallback to
+        // primary — see sync_overlay_windows for the rationale.
+        let enabled = config.osd.get(key).is_some_and(|c| c.enabled);
+        if !enabled
             && let Some(win) = app.get_webview_window(label) {
                 let _ = win.hide();
             }

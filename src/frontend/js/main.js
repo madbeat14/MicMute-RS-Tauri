@@ -120,29 +120,53 @@ function rebuildMonitorSelects() {
 // ──────────────────────────────────
 //  Per-monitor config accessors
 // ──────────────────────────────────
+// Read-only: returns null if no entry exists. Use this for UI rendering so
+// merely opening a monitor's tab doesn't pollute config with default entries.
 function getOverlayConfigForMonitor(key) {
-    if (!window.config) return null;
+    if (!key || !window.config) return null;
+    if (!window.config.persistent_overlay) window.config.persistent_overlay = {};
+    return window.config.persistent_overlay[key] || null;
+}
+
+// Write path: lazily creates a default entry positioned on this monitor.
+// Use this only when the user actually edits a field.
+function ensureOverlayConfigForMonitor(key) {
+    if (!key || !window.config) return null;
     if (!window.config.persistent_overlay) window.config.persistent_overlay = {};
     if (!window.config.persistent_overlay[key]) {
-        // Create a default entry positioned on this monitor
         const mon = window.monitors.find(m => m.label_key === key);
         window.config.persistent_overlay[key] = {
             enabled: false, show_vu: false, opacity: 80,
             x: mon ? mon.position.x + 100 : 100,
             y: mon ? mon.position.y + 100 : 100,
             position_mode: "Custom", locked: false,
-            sensitivity: 5, device_id: null, scale: 100, theme: "Auto"        
-        };    }
+            sensitivity: 5, device_id: null, scale: 100, theme: "Auto"
+        };
+    }
     return window.config.persistent_overlay[key];
 }
 
+// Defaults shown in the UI when a monitor has no stored config yet.
+const OVERLAY_UI_DEFAULTS = Object.freeze({
+    enabled: false, show_vu: false, opacity: 80, locked: false,
+    position_mode: "Custom", sensitivity: 5, scale: 100, theme: "Auto"
+});
+
+const OSD_UI_DEFAULTS = Object.freeze({
+    enabled: false, duration: 1500, position: "Bottom", size: 150, opacity: 80, theme: "Auto"
+});
+
 function getOsdConfigForMonitor(key) {
-    if (!window.config) return null;
+    if (!key || !window.config) return null;
+    if (!window.config.osd) window.config.osd = {};
+    return window.config.osd[key] || null;
+}
+
+function ensureOsdConfigForMonitor(key) {
+    if (!key || !window.config) return null;
     if (!window.config.osd) window.config.osd = {};
     if (!window.config.osd[key]) {
-        window.config.osd[key] = {
-            enabled: false, duration: 1500, position: "Bottom", size: 150, opacity: 80
-        };
+        window.config.osd[key] = { ...OSD_UI_DEFAULTS };
     }
     return window.config.osd[key];
 }
@@ -195,9 +219,9 @@ function applyConfigToUI() {
 }
 
 function applyOverlayConfigToUI() {
-    const key = window.selectedOverlayMonitor || "primary";
-    const ol = getOverlayConfigForMonitor(key);
-    if (!ol) return;
+    const key = window.selectedOverlayMonitor;
+    // Show defaults (no persistence) when this monitor has no entry yet.
+    const ol = getOverlayConfigForMonitor(key) || OVERLAY_UI_DEFAULTS;
 
     document.getElementById("chk-overlay").checked = ol.enabled;
     document.getElementById("chk-overlay-vu").checked = ol.show_vu;
@@ -211,9 +235,8 @@ function applyOverlayConfigToUI() {
 }
 
 function applyOsdConfigToUI() {
-    const key = window.selectedOsdMonitor || "primary";
-    const osd = getOsdConfigForMonitor(key);
-    if (!osd) return;
+    const key = window.selectedOsdMonitor;
+    const osd = getOsdConfigForMonitor(key) || OSD_UI_DEFAULTS;
 
     document.getElementById("chk-osd").checked = osd.enabled;
     setSlider("slider-osd-dur", osd.duration, "osd-dur-val");
@@ -457,43 +480,48 @@ function bindOverlayListeners() {
     });
 
     document.getElementById("chk-overlay").addEventListener("change", e => {
-        const ol = getOverlayConfigForMonitor(window.selectedOverlayMonitor || "primary");
-        if (ol) { ol.enabled = e.target.checked; }
+        const ol = ensureOverlayConfigForMonitor(window.selectedOverlayMonitor);
+        if (!ol) return;
+        ol.enabled = e.target.checked;
         updateSubOptions("chk-overlay", "overlay-options");
         debouncedSave();
     });
     document.getElementById("chk-overlay-vu").addEventListener("change", e => {
-        const ol = getOverlayConfigForMonitor(window.selectedOverlayMonitor || "primary");
-        if (ol) { ol.show_vu = e.target.checked; }
+        const ol = ensureOverlayConfigForMonitor(window.selectedOverlayMonitor);
+        if (!ol) return;
+        ol.show_vu = e.target.checked;
         debouncedSave();
     });
     document.getElementById("chk-overlay-locked").addEventListener("change", e => {
-        const ol = getOverlayConfigForMonitor(window.selectedOverlayMonitor || "primary");
-        if (ol) { ol.locked = e.target.checked; }
+        const ol = ensureOverlayConfigForMonitor(window.selectedOverlayMonitor);
+        if (!ol) return;
+        ol.locked = e.target.checked;
         debouncedSave();
     });
 
     bindSlider("slider-overlay-scale", "overlay-scale-val", v => {
-        const ol = getOverlayConfigForMonitor(window.selectedOverlayMonitor || "primary");
-        if (ol) { ol.scale = v; }
+        const ol = ensureOverlayConfigForMonitor(window.selectedOverlayMonitor);
+        if (ol) ol.scale = v;
     });
     bindSlider("slider-overlay-opacity", "overlay-opacity-val", v => {
-        const ol = getOverlayConfigForMonitor(window.selectedOverlayMonitor || "primary");
-        if (ol) { ol.opacity = v; }
+        const ol = ensureOverlayConfigForMonitor(window.selectedOverlayMonitor);
+        if (ol) ol.opacity = v;
     });
     bindSlider("slider-overlay-sens", "overlay-sens-val", v => {
-        const ol = getOverlayConfigForMonitor(window.selectedOverlayMonitor || "primary");
-        if (ol) { ol.sensitivity = v; }
+        const ol = ensureOverlayConfigForMonitor(window.selectedOverlayMonitor);
+        if (ol) ol.sensitivity = v;
     });
 
     document.getElementById("sel-overlay-pos").addEventListener("change", e => {
-        const ol = getOverlayConfigForMonitor(window.selectedOverlayMonitor || "primary");
-        if (ol) { ol.position_mode = e.target.value; }
+        const ol = ensureOverlayConfigForMonitor(window.selectedOverlayMonitor);
+        if (!ol) return;
+        ol.position_mode = e.target.value;
         debouncedSave();
     });
     document.getElementById("sel-overlay-theme").addEventListener("change", e => {
-        const ol = getOverlayConfigForMonitor(window.selectedOverlayMonitor || "primary");
-        if (ol) { ol.theme = e.target.value; }
+        const ol = ensureOverlayConfigForMonitor(window.selectedOverlayMonitor);
+        if (!ol) return;
+        ol.theme = e.target.value;
         debouncedSave();
     });
 }
@@ -506,31 +534,34 @@ function bindOsdListeners() {
     });
 
     document.getElementById("chk-osd").addEventListener("change", e => {
-        const osd = getOsdConfigForMonitor(window.selectedOsdMonitor || "primary");
-        if (osd) { osd.enabled = e.target.checked; }
+        const osd = ensureOsdConfigForMonitor(window.selectedOsdMonitor);
+        if (!osd) return;
+        osd.enabled = e.target.checked;
         updateSubOptions("chk-osd", "osd-options");
         debouncedSave();
     });
     bindSlider("slider-osd-dur", "osd-dur-val", v => {
-        const osd = getOsdConfigForMonitor(window.selectedOsdMonitor || "primary");
-        if (osd) { osd.duration = v; }
+        const osd = ensureOsdConfigForMonitor(window.selectedOsdMonitor);
+        if (osd) osd.duration = v;
     });
     bindSlider("slider-osd-size", "osd-size-val", v => {
-        const osd = getOsdConfigForMonitor(window.selectedOsdMonitor || "primary");
-        if (osd) { osd.size = v; }
+        const osd = ensureOsdConfigForMonitor(window.selectedOsdMonitor);
+        if (osd) osd.size = v;
     });
     bindSlider("slider-osd-opacity", "osd-opacity-val", v => {
-        const osd = getOsdConfigForMonitor(window.selectedOsdMonitor || "primary");
-        if (osd) { osd.opacity = v; }
+        const osd = ensureOsdConfigForMonitor(window.selectedOsdMonitor);
+        if (osd) osd.opacity = v;
     });
     document.getElementById("sel-osd-theme").addEventListener("change", e => {
-        const osd = getOsdConfigForMonitor(window.selectedOsdMonitor || "primary");
-        if (osd) { osd.theme = e.target.value; }
+        const osd = ensureOsdConfigForMonitor(window.selectedOsdMonitor);
+        if (!osd) return;
+        osd.theme = e.target.value;
         debouncedSave();
     });
     document.getElementById("sel-osd-pos").addEventListener("change", e => {
-        const osd = getOsdConfigForMonitor(window.selectedOsdMonitor || "primary");
-        if (osd) { osd.position = e.target.value; }
+        const osd = ensureOsdConfigForMonitor(window.selectedOsdMonitor);
+        if (!osd) return;
+        osd.position = e.target.value;
         debouncedSave();
     });
 }
