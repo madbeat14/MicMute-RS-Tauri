@@ -7,7 +7,7 @@
     ],
     "windows": [
         "overlay",
-        "overlay-*"
+        "overlay-2"
     ],
     "permissions": [
         "core:default",

@@ -7,7 +7,7 @@
     ],
     "windows": [
         "osd",
-        "osd-*",
+        "osd-2",
         "about"
     ],
     "permissions": [

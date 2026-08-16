@@ -57,9 +57,15 @@ pub struct AppState {
 /// Sanitize a monitor name to be a valid Tauri window label component.
 /// Replaces non-alphanumeric characters (except hyphens) with underscores.
 pub fn sanitize_label(name: &str) -> String {
-    name.chars()
+    let sanitized: String = name
+        .chars()
         .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' })
-        .collect()
+        .collect();
+    if sanitized.is_empty() {
+        "monitor".to_string()
+    } else {
+        sanitized
+    }
 }
 
 /// Snapshot of monitor properties to avoid blocking calls on the main thread.
@@ -1370,3 +1376,18 @@ fn sync_tray_and_emit(app: &AppHandle, state: &Arc<AppState>, cfg: &config::AppC
     }
     let _ = app.emit("config-update", serde_json::json!({ "config": cfg }));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_label() {
+        assert_eq!(sanitize_label("DISPLAY1"), "DISPLAY1");
+        assert_eq!(sanitize_label("\\\\.\\DISPLAY2"), "____DISPLAY2");
+        assert_eq!(sanitize_label("Dell UltraSharp-27"), "Dell_UltraSharp-27");
+        assert_eq!(sanitize_label(""), "monitor");
+        assert_eq!(sanitize_label("   "), "___");
+    }
+}
+

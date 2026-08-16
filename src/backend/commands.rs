@@ -248,7 +248,7 @@ pub async fn preview_audio_feedback(
     state: State<'_, Arc<AppState>>,
     mode: String,
     key: String,
-    config: config::AppConfig,
+    mut config: config::AppConfig,
 ) -> Result<(), CommandError> {
     if !matches!(mode.as_str(), "beep" | "custom") {
         return Err(CommandError::InvalidInput("Invalid audio mode".into()));
@@ -256,6 +256,8 @@ pub async fn preview_audio_feedback(
     if !matches!(key.as_str(), "mute" | "unmute") {
         return Err(CommandError::InvalidInput("Invalid audio key".into()));
     }
+
+    config.validate();
 
     state
         .audio_tx
@@ -267,6 +269,14 @@ pub async fn preview_audio_feedback(
 /// Open a URL in the default browser. Only http/https URLs are allowed.
 #[tauri::command]
 pub async fn open_url(url: String) -> Result<(), CommandError> {
+    if url.len() > 2048 {
+        return Err(CommandError::InvalidInput("URL exceeds maximum length".into()));
+    }
+    if url.chars().any(|c| c.is_control()) {
+        return Err(CommandError::InvalidInput(
+            "URL contains invalid control characters".into(),
+        ));
+    }
     let url_lower = url.to_lowercase();
     if !url_lower.starts_with("https://") && !url_lower.starts_with("http://") {
         return Err(CommandError::InvalidInput(
@@ -336,13 +346,20 @@ pub async fn save_overlay_position(
     x: i32,
     y: i32,
 ) -> Result<(), CommandError> {
-    if monitor_key.len() > 64
+    if monitor_key.is_empty()
+        || monitor_key.len() > 64
         || !monitor_key
             .chars()
             .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
     {
         return Err(CommandError::InvalidInput(
             "Invalid monitor key format".into(),
+        ));
+    }
+
+    if !(-32768..=32767).contains(&x) || !(-32768..=32767).contains(&y) {
+        return Err(CommandError::InvalidInput(
+            "Coordinates out of virtual screen bounds".into(),
         ));
     }
 
