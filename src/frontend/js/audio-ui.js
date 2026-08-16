@@ -31,8 +31,7 @@ async function pickAudioFile(key) {
  */
 async function previewAudio(mode, key) {
     try {
-        const payload = JSON.stringify(window.config);
-        await window.__TAURI__.core.invoke("preview_audio_feedback", { mode, key, payload });
+        await window.__TAURI__.core.invoke("preview_audio_feedback", { mode, key, config: window.config });
     } catch (e) {
         if (typeof showDebug === 'function') showDebug("Preview failed: " + e);
     }

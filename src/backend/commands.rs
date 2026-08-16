@@ -6,10 +6,11 @@
 
 use serde::Serialize;
 use std::sync::Arc;
+use std::sync::mpsc as std_mpsc;
 use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
-use std::sync::mpsc as std_mpsc;
+use crate::error::CommandError;
 use crate::{AppState, AudioMsg, config, startup};
 
 /// Response structure for application state (mute + peak level).
@@ -28,7 +29,7 @@ pub struct DeviceDto {
 
 /// Get current mute state and VU peak level.
 #[tauri::command]
-pub async fn get_state(state: State<'_, Arc<AppState>>) -> Result<AppStateDto, String> {
+pub async fn get_state(state: State<'_, Arc<AppState>>) -> Result<AppStateDto, CommandError> {
     let is_muted = *state.is_muted.lock();
     let peak = state.peak_level.load(std::sync::atomic::Ordering::Relaxed) as f32 / 10000.0;
     Ok(AppStateDto {
@@ -42,7 +43,7 @@ pub async fn get_state(state: State<'_, Arc<AppState>>) -> Result<AppStateDto, S
 pub async fn toggle_mute(
     _app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
-) -> Result<AppStateDto, String> {
+) -> Result<AppStateDto, CommandError> {
     let cfg = state.config.lock().clone();
     let _ = state.audio_tx.try_send(AudioMsg::ToggleMute(cfg));
 
@@ -61,7 +62,7 @@ pub async fn set_mute(
     _app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
     muted: bool,
-) -> Result<AppStateDto, String> {
+) -> Result<AppStateDto, CommandError> {
     let cfg = state.config.lock().clone();
     let _ = state.audio_tx.try_send(AudioMsg::SetMute(muted, cfg));
 
@@ -74,7 +75,7 @@ pub async fn set_mute(
 
 /// Get full config.
 #[tauri::command]
-pub async fn get_config(state: State<'_, Arc<AppState>>) -> Result<config::AppConfig, String> {
+pub async fn get_config(state: State<'_, Arc<AppState>>) -> Result<config::AppConfig, CommandError> {
     Ok(state.config.lock().clone())
 }
 
@@ -83,19 +84,8 @@ pub async fn get_config(state: State<'_, Arc<AppState>>) -> Result<config::AppCo
 pub async fn update_config(
     app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
-    payload: String,
-) -> Result<(), String> {
-    let mut new_config: config::AppConfig = match serde_json::from_str(&payload) {
-        Ok(cfg) => {
-            tracing::debug!("Config deserialization successful");
-            cfg
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "Config deserialization failed");
-            return Err(format!("Config deserialization failed: {}", e));
-        }
-    };
-
+    mut new_config: config::AppConfig,
+) -> Result<(), CommandError> {
     new_config.validate();
 
     // Preserve per-monitor overlay positions
@@ -164,13 +154,14 @@ pub async fn update_config(
 
 /// Enumerate audio capture devices.
 #[tauri::command]
-pub async fn get_devices(state: State<'_, Arc<AppState>>) -> Result<Vec<DeviceDto>, String> {
+pub async fn get_devices(state: State<'_, Arc<AppState>>) -> Result<Vec<DeviceDto>, CommandError> {
     let (tx, rx) = std_mpsc::sync_channel::<()>(1);
     let _ = state.audio_tx.try_send(AudioMsg::RefreshDevicesSync(tx));
     // Wait for the audio worker to finish refreshing (up to 500ms)
     let _ = tauri::async_runtime::spawn_blocking(move || {
         let _ = rx.recv_timeout(std::time::Duration::from_millis(500));
-    }).await;
+    })
+    .await;
     let devs = state.available_devices.lock().clone();
     Ok(devs
         .into_iter()
@@ -180,7 +171,9 @@ pub async fn get_devices(state: State<'_, Arc<AppState>>) -> Result<Vec<DeviceDt
 
 /// Get the current cached device list.
 #[tauri::command]
-pub async fn get_cached_devices(state: State<'_, Arc<AppState>>) -> Result<Vec<DeviceDto>, String> {
+pub async fn get_cached_devices(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<DeviceDto>, CommandError> {
     let devs = state.available_devices.lock().clone();
     Ok(devs
         .into_iter()
@@ -193,7 +186,7 @@ pub async fn get_cached_devices(state: State<'_, Arc<AppState>>) -> Result<Vec<D
 pub async fn set_device(
     state: State<'_, Arc<AppState>>,
     device_id: Option<String>,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     let _ = state.audio_tx.try_send(AudioMsg::SetDevice(device_id.clone()));
     let mut cfg = state.config.lock();
     cfg.device_id = device_id;
@@ -205,7 +198,7 @@ pub async fn set_device(
 
 /// Start listening for a single keypress to record as a hotkey.
 #[tauri::command]
-pub async fn start_recording_hotkey(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+pub async fn start_recording_hotkey(state: State<'_, Arc<AppState>>) -> Result<(), CommandError> {
     let hotkeys = state.hotkeys.lock();
     hotkeys.start_recording();
     Ok(())
@@ -213,7 +206,7 @@ pub async fn start_recording_hotkey(state: State<'_, Arc<AppState>>) -> Result<(
 
 /// Stop listening for hotkey recording.
 #[tauri::command]
-pub async fn stop_recording_hotkey(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+pub async fn stop_recording_hotkey(state: State<'_, Arc<AppState>>) -> Result<(), CommandError> {
     let hotkeys = state.hotkeys.lock();
     hotkeys.stop_recording();
     Ok(())
@@ -221,7 +214,7 @@ pub async fn stop_recording_hotkey(state: State<'_, Arc<AppState>>) -> Result<()
 
 /// Check if a key has been recorded. Returns the VK code or 0.
 #[tauri::command]
-pub async fn get_recorded_hotkey(state: State<'_, Arc<AppState>>) -> Result<u32, String> {
+pub async fn get_recorded_hotkey(state: State<'_, Arc<AppState>>) -> Result<u32, CommandError> {
     let hotkeys = state.hotkeys.lock();
     Ok(hotkeys.try_recv_record().unwrap_or(0))
 }
@@ -234,7 +227,7 @@ pub async fn set_run_on_startup_cmd(
     app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
     enable: bool,
-) -> Result<bool, String> {
+) -> Result<bool, CommandError> {
     startup::set_run_on_startup(enable);
     let actual = startup::get_run_on_startup();
     // Rebuild tray menu so the checkmark reflects the new state
@@ -245,7 +238,7 @@ pub async fn set_run_on_startup_cmd(
 
 /// Get current "run on startup" status.
 #[tauri::command]
-pub async fn get_run_on_startup_cmd() -> Result<bool, String> {
+pub async fn get_run_on_startup_cmd() -> Result<bool, CommandError> {
     Ok(startup::get_run_on_startup())
 }
 
@@ -255,34 +248,42 @@ pub async fn preview_audio_feedback(
     state: State<'_, Arc<AppState>>,
     mode: String,
     key: String,
-    payload: String,
-) -> Result<(), String> {
-    const MAX_CONFIG_SIZE: usize = 64 * 1024;
-    if payload.len() > MAX_CONFIG_SIZE {
-        return Err("Payload too large".into());
-    }
+    mut config: config::AppConfig,
+) -> Result<(), CommandError> {
     if !matches!(mode.as_str(), "beep" | "custom") {
-        return Err("Invalid audio mode".into());
+        return Err(CommandError::InvalidInput("Invalid audio mode".into()));
     }
     if !matches!(key.as_str(), "mute" | "unmute") {
-        return Err("Invalid audio key".into());
+        return Err(CommandError::InvalidInput("Invalid audio key".into()));
     }
 
-    let temp_config: config::AppConfig =
-        serde_json::from_str(&payload).map_err(|e| e.to_string())?;
+    config.validate();
 
-    let _ = state.audio_tx.try_send(AudioMsg::PlayPreview(mode, key, temp_config));
+    state
+        .audio_tx
+        .try_send(AudioMsg::PlayPreview(mode, key, config))
+        .map_err(|_| CommandError::AudioWorkerUnavailable)?;
     Ok(())
 }
 
 /// Open a URL in the default browser. Only http/https URLs are allowed.
 #[tauri::command]
-pub async fn open_url(url: String) -> Result<(), String> {
+pub async fn open_url(url: String) -> Result<(), CommandError> {
+    if url.len() > 2048 {
+        return Err(CommandError::InvalidInput("URL exceeds maximum length".into()));
+    }
+    if url.chars().any(|c| c.is_control()) {
+        return Err(CommandError::InvalidInput(
+            "URL contains invalid control characters".into(),
+        ));
+    }
     let url_lower = url.to_lowercase();
     if !url_lower.starts_with("https://") && !url_lower.starts_with("http://") {
-        return Err("Only http/https URLs are allowed".to_string());
+        return Err(CommandError::InvalidInput(
+            "Only http/https URLs are allowed".to_string(),
+        ));
     }
-    open::that(&url).map_err(|e| e.to_string())
+    open::that(&url).map_err(|e| CommandError::Win32(e.to_string()))
 }
 
 /// Returns the application version from Cargo.toml.
@@ -295,7 +296,7 @@ pub fn get_app_version() -> String {
 /// Uses spawn_blocking to avoid blocking the async runtime while the user
 /// interacts with the native file dialog.
 #[tauri::command]
-pub async fn pick_audio_file(app: tauri::AppHandle) -> Result<Option<String>, String> {
+pub async fn pick_audio_file(app: tauri::AppHandle) -> Result<Option<String>, CommandError> {
     let file_path = tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
             .file()
@@ -303,7 +304,7 @@ pub async fn pick_audio_file(app: tauri::AppHandle) -> Result<Option<String>, St
             .blocking_pick_file()
     })
     .await
-    .map_err(|e| format!("File picker task failed: {}", e))?;
+    .map_err(|e| CommandError::Dialog(format!("File picker task failed: {}", e)))?;
 
     Ok(file_path.map(|p| p.to_string()))
 }
@@ -314,13 +315,15 @@ pub async fn pick_audio_file(app: tauri::AppHandle) -> Result<Option<String>, St
 pub async fn get_overlay_background_is_light(
     app: tauri::AppHandle,
     window_label: Option<String>,
-) -> Result<bool, String> {
+) -> Result<bool, CommandError> {
     use windows::Win32::Foundation::HWND;
 
     let label = window_label.unwrap_or_else(|| "overlay".to_string());
 
     if let Some(overlay_win) = app.get_webview_window(&label) {
-        let tauri_hwnd = overlay_win.hwnd().map_err(|e: tauri::Error| e.to_string())?;
+        let tauri_hwnd = overlay_win
+            .hwnd()
+            .map_err(|e: tauri::Error| CommandError::Win32(e.to_string()))?;
         let hwnd = HWND(tauri_hwnd.0);
         Ok(crate::theme::is_background_light(hwnd))
     } else {
@@ -342,9 +345,22 @@ pub async fn save_overlay_position(
     monitor_key: String,
     x: i32,
     y: i32,
-) -> Result<(), String> {
-    if monitor_key.len() > 64 || !monitor_key.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
-        return Err("Invalid monitor key format".into());
+) -> Result<(), CommandError> {
+    if monitor_key.is_empty()
+        || monitor_key.len() > 64
+        || !monitor_key
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(CommandError::InvalidInput(
+            "Invalid monitor key format".into(),
+        ));
+    }
+
+    if !(-32768..=32767).contains(&x) || !(-32768..=32767).contains(&y) {
+        return Err(CommandError::InvalidInput(
+            "Coordinates out of virtual screen bounds".into(),
+        ));
     }
 
     let cfg_to_save = {
@@ -353,7 +369,10 @@ pub async fn save_overlay_position(
             overlay_cfg.x = x;
             overlay_cfg.y = y;
         } else {
-            tracing::warn!(monitor_key = %monitor_key, "save_overlay_position: unknown monitor key");
+            tracing::warn!(
+                monitor_key = %monitor_key,
+                "save_overlay_position: unknown monitor key"
+            );
             return Ok(());
         }
         cfg.clone()
@@ -368,7 +387,7 @@ pub async fn save_overlay_position(
 /// The primary monitor is always returned with label_key "primary" to match
 /// the special config key.
 #[tauri::command]
-pub async fn get_monitors(app: tauri::AppHandle) -> Result<Vec<crate::MonitorInfo>, String> {
+pub async fn get_monitors(app: tauri::AppHandle) -> Result<Vec<crate::MonitorInfo>, CommandError> {
     Ok(crate::get_monitor_info(&app))
 }
 

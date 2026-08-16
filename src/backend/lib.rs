@@ -3,6 +3,7 @@ pub mod com_interfaces;
 pub mod commands;
 pub mod config;
 pub mod constants;
+pub mod error;
 pub mod hotkey;
 pub mod startup;
 pub mod theme;
@@ -49,14 +50,6 @@ pub struct AppState {
     pub tray: Mutex<Option<tauri::tray::TrayIcon>>,
 }
 
-/// # Safety Invariants
-///
-/// 1. All COM interfaces are managed by the dedicated audio worker thread.
-/// 2. `OutputStream` is kept on the worker thread and never moved.
-/// 3. Communication with the audio worker is via a thread-safe SyncSender.
-unsafe impl Send for AppState {}
-unsafe impl Sync for AppState {}
-
 // ─────────────────────────────────────────
 //  Monitor helpers
 // ─────────────────────────────────────────
@@ -64,9 +57,15 @@ unsafe impl Sync for AppState {}
 /// Sanitize a monitor name to be a valid Tauri window label component.
 /// Replaces non-alphanumeric characters (except hyphens) with underscores.
 pub fn sanitize_label(name: &str) -> String {
-    name.chars()
+    let sanitized: String = name
+        .chars()
         .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' })
-        .collect()
+        .collect();
+    if sanitized.is_empty() {
+        "monitor".to_string()
+    } else {
+        sanitized
+    }
 }
 
 /// Snapshot of monitor properties to avoid blocking calls on the main thread.
@@ -983,7 +982,7 @@ pub fn run() {
                 let version = env!("CARGO_PKG_VERSION");
                 let tray_initial_state = if initial_muted { "Muted" } else { "Unmuted" };
                 let mut tray_builder = TrayIconBuilder::with_id("main")
-                    .tooltip(&format!("MicMuteRs v{version} — {tray_initial_state}"));
+                    .tooltip(format!("MicMuteRs v{version} — {tray_initial_state}"));
 
                 if let Some(icon) = tray_icon {
                     tray_builder = tray_builder.icon(icon);
@@ -1219,7 +1218,7 @@ pub fn trigger_osd(app: &AppHandle, is_muted: bool, _cfg: &config::AppConfig, mo
                 osd_win.hwnd().ok()
                     .and_then(|h| theme::sample_background_brightness(HWND(h.0)))
                     .map(|b| b > 170)
-                    .unwrap_or_else(|| theme::is_system_light_theme())
+                    .unwrap_or_else(theme::is_system_light_theme)
             } else {
                 false
             };
@@ -1377,3 +1376,18 @@ fn sync_tray_and_emit(app: &AppHandle, state: &Arc<AppState>, cfg: &config::AppC
     }
     let _ = app.emit("config-update", serde_json::json!({ "config": cfg }));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_label() {
+        assert_eq!(sanitize_label("DISPLAY1"), "DISPLAY1");
+        assert_eq!(sanitize_label("\\\\.\\DISPLAY2"), "____DISPLAY2");
+        assert_eq!(sanitize_label("Dell UltraSharp-27"), "Dell_UltraSharp-27");
+        assert_eq!(sanitize_label(""), "monitor");
+        assert_eq!(sanitize_label("   "), "___");
+    }
+}
+

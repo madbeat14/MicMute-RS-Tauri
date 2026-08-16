@@ -1,6 +1,6 @@
 [package]
 name = "mic-mute-rs"
-version = "0.1.16"
+version = "0.1.17"
 edition = "2024"
 default-run = "mic-mute-rs"
 
@@ -49,12 +49,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 directories = "5.0"
 open = "5.0"
 parking_lot = "0.12"
+thiserror = "2.0"
 windows-core = "0.58.0"
-windows-sys = { version = "0.59", features = [
-    "Win32_UI_WindowsAndMessaging",
-    "Win32_Graphics_Dwm",
-    "Win32_Foundation",
-] }
 
 [dependencies.windows]
 version = "0.58.0"
@@ -79,3 +75,10 @@ features = [
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

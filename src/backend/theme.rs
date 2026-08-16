@@ -3,12 +3,53 @@
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Gdi::{
     BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetPixel,
-    ReleaseDC, SRCCOPY, SelectObject,
+    HDC, HGDIOBJ, ReleaseDC, SRCCOPY, SelectObject,
 };
 use windows::Win32::System::Registry::{
-    HKEY_CURRENT_USER, KEY_READ, RegOpenKeyExW, RegQueryValueExW,
+    HKEY_CURRENT_USER, KEY_READ, RegCloseKey, RegOpenKeyExW, RegQueryValueExW,
 };
 use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
+
+/// RAII guard for desktop DC released with `ReleaseDC`.
+struct DesktopDcGuard {
+    hdc: HDC,
+}
+
+impl Drop for DesktopDcGuard {
+    fn drop(&mut self) {
+        if !self.hdc.is_invalid() {
+            unsafe {
+                let _ = ReleaseDC(None, self.hdc);
+            }
+        }
+    }
+}
+
+/// RAII guard for memory DC deleted with `DeleteDC`.
+struct MemDcGuard(HDC);
+
+impl Drop for MemDcGuard {
+    fn drop(&mut self) {
+        if !self.0.is_invalid() {
+            unsafe {
+                let _ = DeleteDC(self.0);
+            }
+        }
+    }
+}
+
+/// RAII guard for GDI objects deleted with `DeleteObject`.
+struct GdiObjectGuard(HGDIOBJ);
+
+impl Drop for GdiObjectGuard {
+    fn drop(&mut self) {
+        if !self.0.is_invalid() {
+            unsafe {
+                let _ = DeleteObject(self.0);
+            }
+        }
+    }
+}
 
 /// Check if the Windows system theme is set to light mode via the registry.
 pub fn is_system_light_theme() -> bool {
@@ -43,7 +84,7 @@ pub fn is_system_light_theme() -> bool {
                 Some(&mut data_size),
             );
 
-            let _ = windows::Win32::System::Registry::RegCloseKey(hkey);
+            let _ = RegCloseKey(hkey);
 
             if res.is_ok() {
                 return data == 1;
@@ -107,30 +148,40 @@ pub fn sample_background_brightness(hwnd: HWND) -> Option<u64> {
 
         let x = rect.left;
         let y = rect.top;
-        let width = rect.right - rect.left;
-        let height = rect.bottom - rect.top;
+        let width = rect.right.saturating_sub(rect.left);
+        let height = rect.bottom.saturating_sub(rect.top);
 
-        let desktop_dc = GetDC(None);
-        if desktop_dc.is_invalid() {
+        if width == 0 || height == 0 {
             return None;
         }
 
-        let mem_dc = CreateCompatibleDC(desktop_dc);
-        if mem_dc.is_invalid() {
-            let _ = ReleaseDC(None, desktop_dc);
+        let desktop_dc_raw = GetDC(None);
+        if desktop_dc_raw.is_invalid() {
             return None;
         }
+        let _desktop_guard = DesktopDcGuard {
+            hdc: desktop_dc_raw,
+        };
 
-        let bitmap = CreateCompatibleBitmap(desktop_dc, width, height);
-        if bitmap.is_invalid() {
-            let _ = DeleteDC(mem_dc);
-            let _ = ReleaseDC(None, desktop_dc);
+        let mem_dc_raw = CreateCompatibleDC(desktop_dc_raw);
+        if mem_dc_raw.is_invalid() {
             return None;
         }
+        let _mem_dc_guard = MemDcGuard(mem_dc_raw);
 
-        let old_bitmap = SelectObject(mem_dc, bitmap);
+        let bitmap_raw = CreateCompatibleBitmap(desktop_dc_raw, width, height);
+        if bitmap_raw.is_invalid() {
+            return None;
+        }
+        let _bitmap_guard = GdiObjectGuard(HGDIOBJ(bitmap_raw.0));
 
-        let _ = BitBlt(mem_dc, 0, 0, width, height, desktop_dc, x, y, SRCCOPY);
+        let old_bitmap = SelectObject(mem_dc_raw, bitmap_raw);
+
+        let blt_ok = BitBlt(mem_dc_raw, 0, 0, width, height, desktop_dc_raw, x, y, SRCCOPY);
+        if blt_ok.is_err() {
+            let _ = SelectObject(mem_dc_raw, old_bitmap);
+            return None;
+        }
 
         let mut total_brightness: u64 = 0;
         let mut sample_count: u64 = 0;
@@ -140,7 +191,7 @@ pub fn sample_background_brightness(hwnd: HWND) -> Option<u64> {
 
         for sy in (0..height).step_by(step_y as usize) {
             for sx in (0..width).step_by(step_x as usize) {
-                let pixel = GetPixel(mem_dc, sx, sy);
+                let pixel = GetPixel(mem_dc_raw, sx, sy);
                 // COLORREF layout is 0x00BBGGRR (not RGB)
                 let pixel_value = pixel.0;
                 let r = (pixel_value & 0xFF) as u64;
@@ -152,10 +203,7 @@ pub fn sample_background_brightness(hwnd: HWND) -> Option<u64> {
             }
         }
 
-        let _ = SelectObject(mem_dc, old_bitmap);
-        let _ = DeleteObject(bitmap);
-        let _ = DeleteDC(mem_dc);
-        let _ = ReleaseDC(None, desktop_dc);
+        let _ = SelectObject(mem_dc_raw, old_bitmap);
 
         if sample_count == 0 {
             return None;

@@ -267,12 +267,16 @@ impl AppConfig {
 
     pub fn load() -> Self {
         let path = match Self::get_config_path() {
-            Some(p) if p.exists() => p,
-            _ => return Self::default(),
+            Some(p) => p,
+            None => return Self::default(),
         };
 
         let content = match fs::read_to_string(&path) {
             Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                tracing::debug!(path = %path.display(), "Config file not found, initializing defaults");
+                return Self::default();
+            }
             Err(e) => {
                 tracing::error!(error = %e, path = %path.display(), "Failed to read config file, using defaults");
                 return Self::default();
@@ -349,11 +353,37 @@ impl AppConfig {
             Self::get_config_path().ok_or_else(|| "Could not determine config path".to_string())?;
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Config serialization failed: {}", e))?;
-        fs::write(&path, json).map_err(|e| {
-            let msg = format!("Failed to write config to {}: {}", path.display(), e);
-            tracing::error!("{}", msg);
-            msg
-        })
+
+        // Atomic write: write to temp file, sync buffers, then atomically replace
+        let temp_path = path.with_extension("tmp");
+        {
+            use std::io::Write;
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&temp_path)
+                .map_err(|e| format!("Failed to create temp config {}: {}", temp_path.display(), e))?;
+
+            file.write_all(json.as_bytes())
+                .map_err(|e| format!("Failed to write temp config: {}", e))?;
+
+            file.sync_all()
+                .map_err(|e| format!("Failed to flush temp config to disk: {}", e))?;
+        }
+
+        if let Err(e) = fs::rename(&temp_path, &path) {
+            // Fallback for filesystem edge cases (e.g. cross-volume rename restrictions)
+            if let Err(copy_err) = fs::copy(&temp_path, &path) {
+                let _ = fs::remove_file(&temp_path);
+                let msg = format!("Failed to write config {}: rename failed ({}), copy failed ({})", path.display(), e, copy_err);
+                tracing::error!("{}", msg);
+                return Err(msg);
+            }
+            let _ = fs::remove_file(&temp_path);
+        }
+
+        Ok(())
     }
 }
 

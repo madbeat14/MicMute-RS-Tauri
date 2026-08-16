@@ -235,11 +235,22 @@ impl AudioController {
     }
 }
 
-/// Reject paths containing `..` components to prevent path traversal.
-fn is_safe_sound_path(path: &str) -> bool {
-    !std::path::Path::new(path)
-        .components()
-        .any(|c| matches!(c, std::path::Component::ParentDir))
+/// Reject paths containing `..` components or UNC network paths to prevent
+/// path traversal and NetNTLM credential leaks.
+pub(crate) fn is_safe_sound_path(path: &str) -> bool {
+    let p = std::path::Path::new(path);
+    if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return false;
+    }
+    for component in p.components() {
+        if let std::path::Component::Prefix(prefix_comp) = component {
+            match prefix_comp.kind() {
+                std::path::Prefix::UNC(_, _) | std::path::Prefix::VerbatimUNC(_, _) => return false,
+                _ => {}
+            }
+        }
+    }
+    true
 }
 
 /// Play audio feedback and return the Sink so the caller can keep it alive.
@@ -409,5 +420,26 @@ pub fn get_audio_devices() -> Result<Vec<(String, String)>> {
                 }
         }
         Ok(devices)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_safe_sound_path() {
+        assert!(is_safe_sound_path("sound.wav"));
+        assert!(is_safe_sound_path("custom/my_sound.wav"));
+        assert!(is_safe_sound_path("C:\\Users\\User\\Music\\beep.wav"));
+
+        // Reject path traversal
+        assert!(!is_safe_sound_path("../secret.wav"));
+        assert!(!is_safe_sound_path("foo/../../bar.wav"));
+        assert!(!is_safe_sound_path("..\\windows\\system32\\cmd.exe"));
+
+        // Reject UNC paths
+        assert!(!is_safe_sound_path("\\\\attacker.com\\share\\sound.wav"));
+        assert!(!is_safe_sound_path("\\\\192.168.1.1\\leak\\sound.wav"));
     }
 }
