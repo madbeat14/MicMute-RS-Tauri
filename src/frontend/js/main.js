@@ -601,7 +601,7 @@ async function saveConfig() {
     }
     try {
         window.isSaving = true;
-        await invoke("update_config", { payload: JSON.stringify(window.config) });
+        await invoke("update_config", { newConfig: window.config });
         window.isSaving = false;
         applyConfigToUI();
         showDebug("Settings saved");

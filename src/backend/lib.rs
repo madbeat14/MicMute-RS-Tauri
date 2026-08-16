@@ -3,6 +3,7 @@ pub mod com_interfaces;
 pub mod commands;
 pub mod config;
 pub mod constants;
+pub mod error;
 pub mod hotkey;
 pub mod startup;
 pub mod theme;
@@ -48,14 +49,6 @@ pub struct AppState {
     pub audio_tx: std_mpsc::SyncSender<AudioMsg>,
     pub tray: Mutex<Option<tauri::tray::TrayIcon>>,
 }
-
-/// # Safety Invariants
-///
-/// 1. All COM interfaces are managed by the dedicated audio worker thread.
-/// 2. `OutputStream` is kept on the worker thread and never moved.
-/// 3. Communication with the audio worker is via a thread-safe SyncSender.
-unsafe impl Send for AppState {}
-unsafe impl Sync for AppState {}
 
 // ─────────────────────────────────────────
 //  Monitor helpers
@@ -983,7 +976,7 @@ pub fn run() {
                 let version = env!("CARGO_PKG_VERSION");
                 let tray_initial_state = if initial_muted { "Muted" } else { "Unmuted" };
                 let mut tray_builder = TrayIconBuilder::with_id("main")
-                    .tooltip(&format!("MicMuteRs v{version} — {tray_initial_state}"));
+                    .tooltip(format!("MicMuteRs v{version} — {tray_initial_state}"));
 
                 if let Some(icon) = tray_icon {
                     tray_builder = tray_builder.icon(icon);
@@ -1219,7 +1212,7 @@ pub fn trigger_osd(app: &AppHandle, is_muted: bool, _cfg: &config::AppConfig, mo
                 osd_win.hwnd().ok()
                     .and_then(|h| theme::sample_background_brightness(HWND(h.0)))
                     .map(|b| b > 170)
-                    .unwrap_or_else(|| theme::is_system_light_theme())
+                    .unwrap_or_else(theme::is_system_light_theme)
             } else {
                 false
             };

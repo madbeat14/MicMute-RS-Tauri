@@ -2091,7 +2091,7 @@ dependencies = [
 
 [[package]]
 name = "mic-mute-rs"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "directories",
  "open",
@@ -2103,11 +2103,11 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-shell",
+ "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
  "windows 0.58.0",
  "windows-core 0.58.0",
- "windows-sys 0.59.0",
 ]
 
 [[package]]

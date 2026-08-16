@@ -1,0 +1,21 @@
+{
+    "$schema": "../gen/schemas/desktop-schema.json",
+    "identifier": "osd",
+    "description": "Capabilities for OSD and About windows",
+    "platforms": [
+        "windows"
+    ],
+    "windows": [
+        "osd",
+        "osd-*",
+        "about"
+    ],
+    "permissions": [
+        "core:default",
+        "core:window:allow-hide",
+        "core:window:allow-show",
+        "core:window:allow-center",
+        "core:window:allow-set-size",
+        "core:window:allow-set-position"
+    ]
+}
