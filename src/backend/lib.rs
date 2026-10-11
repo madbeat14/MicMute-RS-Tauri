@@ -235,11 +235,15 @@ fn apply_overlay_config(win: &tauri::WebviewWindow, cfg: &config::OverlayConfig)
     let scale = cfg.scale as f64;
     let w = if cfg.show_vu { scale + 30.0 } else { scale };
     let _ = win.set_size(tauri::LogicalSize::new(w, scale));
-    if let Ok(tauri_hwnd) = win.hwnd() {
-        use windows::Win32::Foundation::HWND;
-        let hwnd = HWND(tauri_hwnd.0);
-        crate::utils::set_click_through(hwnd, cfg.locked);
-    }
+    // Bootstrap transparency: Tauri's set_ignore_cursor_events(true) triggers
+    // TAO to properly configure WS_EX_LAYERED (required for WebView2 per-pixel alpha).
+    let _ = win.set_ignore_cursor_events(true);
+    if !cfg.locked
+        && let Ok(tauri_hwnd) = win.hwnd() {
+            use windows::Win32::Foundation::HWND;
+            let hwnd = HWND(tauri_hwnd.0);
+            crate::utils::set_click_through(hwnd, false);
+        }
     let _ = win.set_always_on_top(true);
 }
 

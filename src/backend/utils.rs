@@ -6,7 +6,7 @@ use windows::Win32::System::SystemInformation::GetTickCount;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 use windows::Win32::UI::WindowsAndMessaging::{
     GWL_EXSTYLE, GetWindowLongPtrW, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SetWindowLongPtrW, SetWindowPos, WS_EX_TRANSPARENT,
+    SetWindowLongPtrW, SetWindowPos, WS_EX_LAYERED, WS_EX_TRANSPARENT,
 };
 
 pub fn get_idle_duration() -> f32 {
@@ -61,17 +61,17 @@ pub fn vk_to_string(vk: u32) -> Cow<'static, str> {
 }
 
 /// Toggle WS_EX_TRANSPARENT on an HWND without touching other extended styles.
-/// Tauri's set_ignore_cursor_events() rebuilds ALL extended styles via
-/// SetWindowLong, which removes WS_EX_LAYERED and breaks transparent
-/// window compositing. This function only toggles the single bit needed.
+/// Ensures WS_EX_LAYERED is maintained so transparent WebView2 per-pixel alpha compositing
+/// remains active and never renders rectangular borders or solid background boxes.
 pub fn set_click_through(hwnd: HWND, click_through: bool) {
     unsafe {
         let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
-        let new_ex_style = if click_through {
-            ex_style | WS_EX_TRANSPARENT.0
+        let mut new_ex_style = ex_style | WS_EX_LAYERED.0;
+        if click_through {
+            new_ex_style |= WS_EX_TRANSPARENT.0;
         } else {
-            ex_style & !WS_EX_TRANSPARENT.0
-        };
+            new_ex_style &= !WS_EX_TRANSPARENT.0;
+        }
         if new_ex_style != ex_style {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_ex_style as isize);
         }
