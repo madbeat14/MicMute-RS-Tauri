@@ -149,6 +149,8 @@ function updateMuteUI(muted) {
         icon.src = muted ? "assets/mic_muted_white.svg" : "assets/mic_white.svg";
         icon.alt = muted ? "Muted" : "Mic";
     }
-    btn.setAttribute("aria-label", muted ? "Unmute microphone" : "Mute microphone");
-    btn.setAttribute("aria-pressed", String(muted));
+    if (btn) {
+        btn.setAttribute("aria-label", muted ? "Unmute microphone" : "Mute microphone");
+        btn.setAttribute("aria-pressed", String(muted));
+    }
 }

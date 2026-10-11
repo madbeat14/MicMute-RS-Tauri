@@ -88,14 +88,15 @@ pub async fn update_config(
 ) -> Result<(), CommandError> {
     new_config.validate();
 
-    // Preserve per-monitor overlay positions
+    // Preserve per-monitor overlay positions when mode is Custom
     {
         let mut cfg = state.config.lock();
         for (key, existing) in cfg.persistent_overlay.iter() {
-            if let Some(new_overlay) = new_config.persistent_overlay.get_mut(key) {
-                new_overlay.x = existing.x;
-                new_overlay.y = existing.y;
-            }
+            if let Some(new_overlay) = new_config.persistent_overlay.get_mut(key)
+                && new_overlay.position_mode == "Custom" {
+                    new_overlay.x = existing.x;
+                    new_overlay.y = existing.y;
+                }
         }
         *cfg = new_config.clone();
     }
@@ -341,6 +342,7 @@ pub fn get_overlay_topmost_interval() -> u64 {
 /// Called when the user finishes dragging a specific overlay window.
 #[tauri::command]
 pub async fn save_overlay_position(
+    app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
     monitor_key: String,
     x: i32,
@@ -366,8 +368,16 @@ pub async fn save_overlay_position(
     let cfg_to_save = {
         let mut cfg = state.config.lock();
         if let Some(overlay_cfg) = cfg.persistent_overlay.get_mut(&monitor_key) {
+            if overlay_cfg.locked {
+                tracing::warn!(
+                    monitor_key = %monitor_key,
+                    "save_overlay_position: overlay is locked, ignoring move"
+                );
+                return Ok(());
+            }
             overlay_cfg.x = x;
             overlay_cfg.y = y;
+            overlay_cfg.position_mode = "Custom".to_string();
         } else {
             tracing::warn!(
                 monitor_key = %monitor_key,
@@ -380,6 +390,8 @@ pub async fn save_overlay_position(
     if let Err(e) = cfg_to_save.save() {
         tracing::error!("{}", e);
     }
+    use tauri::Emitter;
+    let _ = app.emit("config-update", serde_json::json!({ "config": cfg_to_save }));
     Ok(())
 }
 

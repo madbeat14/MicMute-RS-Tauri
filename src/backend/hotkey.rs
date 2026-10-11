@@ -105,7 +105,7 @@ impl HotkeyManager {
                                     let now =
                                         windows::Win32::System::SystemInformation::GetTickCount();
                                     let last = LAST_LL_SEND_TICK.load(Ordering::SeqCst);
-                                    if now.saturating_sub(last) > 100
+                                    if now.wrapping_sub(last) > 100
                                         && let Some(sender) = HOTKEY_SENDER.get() {
                                             let _ = sender.send(vk);
                                         }

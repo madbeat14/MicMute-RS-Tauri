@@ -60,6 +60,7 @@ pub fn sanitize_label(name: &str) -> String {
     let sanitized: String = name
         .chars()
         .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' })
+        .take(64)
         .collect();
     if sanitized.is_empty() {
         "monitor".to_string()
@@ -89,7 +90,8 @@ pub fn get_monitor_info(app: &AppHandle) -> Vec<MonitorInfo> {
         .into_iter()
         .map(|m| {
             let name = m.name().map(|n| n.as_str()).unwrap_or("Unknown").to_string();
-            let is_primary = primary_name.as_deref() == Some(&name);
+            let is_primary = primary_name.as_deref() == Some(&name)
+                || (primary_name.is_none() && m.position().x == 0 && m.position().y == 0);
             let label_key = if is_primary {
                 "primary".to_string()
             } else {
@@ -106,17 +108,20 @@ pub fn get_monitor_info(app: &AppHandle) -> Vec<MonitorInfo> {
         })
         .collect();
 
-    // If no monitor was detected as primary (name mismatch between
-    // primary_monitor() and available_monitors()), treat the first monitor
-    // as primary so that the "primary" config key gets used.
+    // If no monitor was detected as primary (name mismatch and no (0,0)),
+    // treat the monitor with (0,0) position, or first monitor, as primary.
     if !infos.is_empty() && !infos.iter().any(|m| m.is_primary) {
+        let primary_idx = infos
+            .iter()
+            .position(|m| m.position.x == 0 && m.position.y == 0)
+            .unwrap_or(0);
         tracing::debug!(
             primary_name = ?primary_name,
-            first_monitor = %infos[0].name,
-            "Primary monitor name mismatch — treating first monitor as primary"
+            selected_monitor = %infos[primary_idx].name,
+            "Primary monitor name mismatch — resolving primary monitor"
         );
-        infos[0].is_primary = true;
-        infos[0].label_key = "primary".to_string();
+        infos[primary_idx].is_primary = true;
+        infos[primary_idx].label_key = "primary".to_string();
     }
 
     infos
@@ -154,18 +159,87 @@ pub fn window_monitor_key(label: &str) -> Option<String> {
 //  Overlay window management
 // ─────────────────────────────────────────
 
+/// Compute physical pixel coordinates for an overlay window based on preset position mode.
+pub fn calculate_preset_position(
+    mode: &str,
+    mon: &MonitorInfo,
+    scale: u32,
+    show_vu: bool,
+) -> Option<(i32, i32)> {
+    if mode == "Custom" {
+        return None;
+    }
+
+    let logical_w = if show_vu { scale + 30 } else { scale } as f64;
+    let logical_h = scale as f64;
+    let overlay_w = (logical_w * mon.scale_factor).round() as i32;
+    let overlay_h = (logical_h * mon.scale_factor).round() as i32;
+
+    let margin = (20.0 * mon.scale_factor).round() as i32;
+
+    let mon_w = mon.size.width as i32;
+    let mon_h = mon.size.height as i32;
+
+    let x = match mode {
+        "Top-Left" | "Center-Left" | "Bottom-Left" => mon.position.x + margin,
+        "Top-Center" | "Center" | "Bottom-Center" => {
+            mon.position.x + (mon_w - overlay_w).max(0) / 2
+        }
+        "Top-Right" | "Center-Right" | "Bottom-Right" => {
+            mon.position.x + mon_w - overlay_w - margin
+        }
+        _ => return None,
+    };
+
+    let y = match mode {
+        "Top-Left" | "Top-Center" | "Top-Right" => mon.position.y + margin,
+        "Center-Left" | "Center" | "Center-Right" => {
+            mon.position.y + (mon_h - overlay_h).max(0) / 2
+        }
+        "Bottom-Left" | "Bottom-Center" | "Bottom-Right" => {
+            mon.position.y + mon_h - overlay_h - margin
+        }
+        _ => return None,
+    };
+
+    Some((x, y))
+}
+
+/// Clamp custom overlay coordinates within the target monitor's bounds,
+/// ensuring the overlay never teleports across the screen or disappears off-edge.
+pub fn clamp_custom_position(
+    x: i32,
+    y: i32,
+    mon: &MonitorInfo,
+    scale: u32,
+    show_vu: bool,
+) -> (i32, i32) {
+    let logical_w = if show_vu { scale + 30 } else { scale } as f64;
+    let logical_h = scale as f64;
+    let overlay_w = (logical_w * mon.scale_factor).round() as i32;
+    let overlay_h = (logical_h * mon.scale_factor).round() as i32;
+
+    let mon_x_min = mon.position.x;
+    let mon_y_min = mon.position.y;
+    let max_x = (mon.position.x + mon.size.width as i32 - overlay_w).max(mon_x_min);
+    let max_y = (mon.position.y + mon.size.height as i32 - overlay_h).max(mon_y_min);
+
+    let clamped_x = x.clamp(mon_x_min, max_x);
+    let clamped_y = y.clamp(mon_y_min, max_y);
+
+    (clamped_x, clamped_y)
+}
+
 /// Apply sizing and click-through settings to an existing overlay window.
 fn apply_overlay_config(win: &tauri::WebviewWindow, cfg: &config::OverlayConfig) {
     let scale = cfg.scale as f64;
     let w = if cfg.show_vu { scale + 30.0 } else { scale };
     let _ = win.set_size(tauri::LogicalSize::new(w, scale));
-    let _ = win.set_ignore_cursor_events(true);
-    if !cfg.locked
-        && let Ok(tauri_hwnd) = win.hwnd() {
-            use windows::Win32::Foundation::HWND;
-            let hwnd = HWND(tauri_hwnd.0);
-            crate::utils::set_click_through(hwnd, false);
-        }
+    if let Ok(tauri_hwnd) = win.hwnd() {
+        use windows::Win32::Foundation::HWND;
+        let hwnd = HWND(tauri_hwnd.0);
+        crate::utils::set_click_through(hwnd, cfg.locked);
+    }
     let _ = win.set_always_on_top(true);
 }
 
@@ -202,23 +276,35 @@ pub fn sync_overlay_windows(app: &AppHandle, config: &config::AppConfig, monitor
         if let Some(win) = app.get_webview_window(label) {
             apply_overlay_config(&win, &overlay_cfg);
 
-            // Snap back to this monitor if the saved position lies outside its
-            // physical bounds — protects against stale coordinates left over
-            // from the older cross-monitor-inheritance bug.
-            let mon_x_min = mon.position.x;
-            let mon_y_min = mon.position.y;
-            let mon_x_max = mon.position.x + mon.size.width as i32;
-            let mon_y_max = mon.position.y + mon.size.height as i32;
-            let in_bounds = overlay_cfg.x >= mon_x_min
-                && overlay_cfg.x < mon_x_max
-                && overlay_cfg.y >= mon_y_min
-                && overlay_cfg.y < mon_y_max;
-
-            let (px, py) = if in_bounds {
-                (overlay_cfg.x, overlay_cfg.y)
+            // Determine physical window position:
+            // 1. If position_mode is a preset (not Custom), calculate quadrant coordinates.
+            // 2. Otherwise (Custom), clamp coordinates within monitor bounds so the overlay
+            //    stays on its saved side of the screen rather than teleporting to (100, 100).
+            let (px, py) = if let Some(preset_coords) = calculate_preset_position(
+                &overlay_cfg.position_mode,
+                mon,
+                overlay_cfg.scale,
+                overlay_cfg.show_vu,
+            ) {
+                // For presets, update AppState config with calculated coordinates
+                if let Some(state) = app.try_state::<Arc<AppState>>() {
+                    let mut cfg = state.config.lock();
+                    if let Some(c) = cfg.persistent_overlay.get_mut(key) {
+                        c.x = preset_coords.0;
+                        c.y = preset_coords.1;
+                    }
+                }
+                preset_coords
             } else {
-                (mon.position.x + 100, mon.position.y + 100)
+                clamp_custom_position(
+                    overlay_cfg.x,
+                    overlay_cfg.y,
+                    mon,
+                    overlay_cfg.scale,
+                    overlay_cfg.show_vu,
+                )
             };
+
             let _ = win.set_position(tauri::PhysicalPosition::new(px, py));
             let _ = win.show();
         }
@@ -1388,6 +1474,75 @@ mod tests {
         assert_eq!(sanitize_label("Dell UltraSharp-27"), "Dell_UltraSharp-27");
         assert_eq!(sanitize_label(""), "monitor");
         assert_eq!(sanitize_label("   "), "___");
+
+        // Verify capping at 64 characters
+        let very_long_name = "A".repeat(100);
+        let sanitized = sanitize_label(&very_long_name);
+        assert_eq!(sanitized.len(), 64);
+    }
+
+    #[test]
+    fn test_calculate_preset_position() {
+        let mon = MonitorInfo {
+            name: "Display1".to_string(),
+            label_key: "primary".to_string(),
+            is_primary: true,
+            position: tauri::PhysicalPosition::new(0, 0),
+            size: tauri::PhysicalSize::new(1920, 1080),
+            scale_factor: 1.0,
+        };
+
+        // Custom mode returns None
+        assert_eq!(calculate_preset_position("Custom", &mon, 48, false), None);
+
+        // Top-Left: x = 0 + 20 = 20, y = 0 + 20 = 20
+        assert_eq!(
+            calculate_preset_position("Top-Left", &mon, 48, false),
+            Some((20, 20))
+        );
+
+        // Center: x = (1920 - 48) / 2 = 936, y = (1080 - 48) / 2 = 516
+        assert_eq!(
+            calculate_preset_position("Center", &mon, 48, false),
+            Some((936, 516))
+        );
+
+        // Bottom-Right: x = 1920 - 48 - 20 = 1852, y = 1080 - 48 - 20 = 1012
+        assert_eq!(
+            calculate_preset_position("Bottom-Right", &mon, 48, false),
+            Some((1852, 1012))
+        );
+    }
+
+    #[test]
+    fn test_clamp_custom_position() {
+        let mon = MonitorInfo {
+            name: "Display1".to_string(),
+            label_key: "primary".to_string(),
+            is_primary: true,
+            position: tauri::PhysicalPosition::new(0, 0),
+            size: tauri::PhysicalSize::new(2560, 1440),
+            scale_factor: 1.0,
+        };
+
+        // Within bounds: (2352, 145) stays untouched
+        assert_eq!(
+            clamp_custom_position(2352, 145, &mon, 125, true),
+            (2352, 145)
+        );
+
+        // Slightly past right edge: clamped to right border, NOT snapped to (100, 100)
+        // overlay_w = 125 + 30 = 155. max_x = 2560 - 155 = 2405.
+        assert_eq!(
+            clamp_custom_position(2600, 145, &mon, 125, true),
+            (2405, 145)
+        );
+
+        // Past left edge: clamped to 0
+        assert_eq!(
+            clamp_custom_position(-50, 145, &mon, 125, true),
+            (0, 145)
+        );
     }
 }
 

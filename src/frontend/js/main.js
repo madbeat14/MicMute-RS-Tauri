@@ -516,7 +516,7 @@ function bindOverlayListeners() {
         const ol = ensureOverlayConfigForMonitor(window.selectedOverlayMonitor);
         if (!ol) return;
         ol.position_mode = e.target.value;
-        debouncedSave();
+        saveConfig();
     });
     document.getElementById("sel-overlay-theme").addEventListener("change", e => {
         const ol = ensureOverlayConfigForMonitor(window.selectedOverlayMonitor);

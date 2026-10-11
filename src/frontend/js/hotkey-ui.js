@@ -123,6 +123,7 @@ async function startRecording(key) {
         return;
     }
 
+    if (recordingPollTimer) { clearInterval(recordingPollTimer); recordingPollTimer = null; }
     recordingPollTimer = setInterval(async () => {
         const vk = await window.__TAURI__.core.invoke("get_recorded_hotkey");
         if (vk !== null && vk !== undefined && vk !== 0) {

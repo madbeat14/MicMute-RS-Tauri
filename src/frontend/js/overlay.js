@@ -13,6 +13,7 @@ let topmostIntervalId = null;
 let unlistenState = null;
 let unlistenConfig = null;
 let unlistenMoved = null;
+let isInitialized = false;
 
 const { getCurrentWindow } = window.__TAURI__.window;
 const _selfWin = getCurrentWindow();
@@ -108,6 +109,7 @@ async function init() {
     if (unlistenMoved) { unlistenMoved(); unlistenMoved = null; }
     let movedDebounce = null;
     unlistenMoved = await _selfWin.onMoved(() => {
+        if (!isInitialized) return;
         if (movedDebounce) clearTimeout(movedDebounce);
         movedDebounce = setTimeout(() => {
             saveCurrentPosition();
@@ -115,6 +117,7 @@ async function init() {
     });
 
     updateDragRegion();
+    isInitialized = true;
 }
 
 function updateDragRegion() {
@@ -125,13 +128,18 @@ function updateDragRegion() {
 
 
 async function saveCurrentPosition() {
-    if (!monitorKey) return;
+    if (!monitorKey || !isInitialized) return;
     try {
+        const myCfg = getMyConfig();
+        // NEVER save position if overlay is locked or config is not yet loaded.
+        // A locked overlay cannot be dragged by the user; any onMoved event
+        // is from OS/DWM adjustments or display changes and must never overwrite config.
+        if (!myCfg || myCfg.locked) return;
+
         const position = await _selfWin.outerPosition();
         // Suppress echo loops: if the position already matches config (e.g. after
         // sync_overlay_windows called set_position), skip the backend invoke.
-        const myCfg = getMyConfig();
-        if (myCfg && myCfg.x === position.x && myCfg.y === position.y) return;
+        if (myCfg.x === position.x && myCfg.y === position.y) return;
         await invoke("save_overlay_position", { monitorKey, x: position.x, y: position.y });
     } catch (e) {
         console.error("Failed to save overlay position:", e);

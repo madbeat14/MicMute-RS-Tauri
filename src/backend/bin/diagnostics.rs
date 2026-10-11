@@ -3,8 +3,9 @@ use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
 use windows::Win32::Media::Audio::{
     DEVICE_STATE_ACTIVE, IMMDeviceEnumerator, MMDeviceEnumerator, eCapture, eRender,
 };
+use windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc;
 use windows::Win32::System::Com::{
-    CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, STGM_READ,
+    CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree, STGM_READ,
 };
 use windows::core::Result;
 
@@ -53,20 +54,11 @@ fn get_device_name(device: &windows::Win32::Media::Audio::IMMDevice) -> String {
     unsafe {
         let mut name = "Unknown".to_string();
         if let Ok(store) = device.OpenPropertyStore(STGM_READ)
-            && let Ok(prop_var) = store.GetValue(&PKEY_Device_FriendlyName) {
-                let ptr = &prop_var as *const _ as *const u16;
-                let vt = *ptr;
-                if vt == 31 {
-                    let wstr_ptr_addr = ptr.add(4) as *const *const u16;
-                    let wstr_ptr = *wstr_ptr_addr;
-                    if !wstr_ptr.is_null() {
-                        let mut len = 0;
-                        while *wstr_ptr.add(len) != 0 {
-                            len += 1;
-                        }
-                        let slice = std::slice::from_raw_parts(wstr_ptr, len);
-                        name = String::from_utf16_lossy(slice);
-                    }
+            && let Ok(prop_var) = store.GetValue(&PKEY_Device_FriendlyName)
+            && let Ok(pwstr) = PropVariantToStringAlloc(&prop_var) {
+                name = pwstr.to_string().unwrap_or_else(|_| "Unknown".to_string());
+                if !pwstr.0.is_null() {
+                    CoTaskMemFree(Some(pwstr.0 as *const std::ffi::c_void));
                 }
             }
         name
