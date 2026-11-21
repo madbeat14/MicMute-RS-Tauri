@@ -62,3 +62,11 @@ pub const OVERLAY_BRIGHT_THRESHOLD: u64 = 210;
 /// Must be lower than OVERLAY_BRIGHT_THRESHOLD to create a hysteresis dead zone
 /// that prevents rapid toggling. Range 0–255; 170 ≈ 67% brightness.
 pub const OVERLAY_DIM_THRESHOLD: u64 = 170;
+
+/// Interval in milliseconds between audio controller reconnect attempts
+/// while the audio controller is unavailable.
+pub const AUDIO_RECONNECT_INTERVAL_MS: u64 = 3000;
+
+/// Interval in milliseconds between checks for default capture/render
+/// device changes (used to follow the Windows default device).
+pub const AUDIO_DEVICE_CHECK_INTERVAL_MS: u64 = 2000;

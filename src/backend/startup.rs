@@ -8,6 +8,7 @@ use std::env;
 use std::fs;
 use std::os::windows::process::CommandExt;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use windows::core::PCWSTR;
 use windows::Win32::System::Registry::{
     HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE, REG_SZ, RegCloseKey, RegDeleteValueW,
@@ -17,6 +18,10 @@ use windows::Win32::System::Registry::{
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 const REG_RUN_SUBKEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const APP_REG_NAME: &str = "MicMuteRs";
+
+/// Last known run-on-startup state. Populated by [`get_run_on_startup`] so the
+/// tray menu can be built without invoking schtasks/PowerShell on the main thread.
+static STARTUP_ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// Escape special characters for safe XML interpolation.
 fn xml_escape(s: &str) -> String {
@@ -48,7 +53,7 @@ const TASK_XML_TEMPLATE: &str = r#"<?xml version="1.0" encoding="UTF-16"?>
   <Settings>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-    <StopIfGoingOnBatteries>true</StopIfGoingOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
     <AllowHardTerminate>false</AllowHardTerminate>
     <StartWhenAvailable>true</StartWhenAvailable>
     <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
@@ -60,6 +65,7 @@ const TASK_XML_TEMPLATE: &str = r#"<?xml version="1.0" encoding="UTF-16"?>
     <Enabled>true</Enabled>
     <Hidden>false</Hidden>
     <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
     <Priority>0</Priority>
   </Settings>
   <Actions Context="Author">
@@ -70,7 +76,14 @@ const TASK_XML_TEMPLATE: &str = r#"<?xml version="1.0" encoding="UTF-16"?>
   </Actions>
 </Task>"#;
 
+/// Return the cached run-on-startup state without invoking schtasks/PowerShell.
+/// The cache is filled by [`get_run_on_startup`].
+pub fn cached_run_on_startup() -> bool {
+    STARTUP_ENABLED.load(Ordering::SeqCst)
+}
+
 /// Query whether startup is enabled via Task Scheduler or Registry Run Key.
+/// Caches the result so tray menu construction never blocks on a subprocess.
 pub fn get_run_on_startup() -> bool {
     let task_exists = Command::new("schtasks")
         .args(["/Query", "/TN", "MicMuteStartup"])
@@ -79,11 +92,9 @@ pub fn get_run_on_startup() -> bool {
         .map(|out| out.status.success())
         .unwrap_or(false);
 
-    if task_exists {
-        return true;
-    }
-
-    get_registry_run()
+    let enabled = if task_exists { true } else { get_registry_run() };
+    STARTUP_ENABLED.store(enabled, Ordering::SeqCst);
+    enabled
 }
 
 /// Enable or disable startup across both mechanisms.
@@ -294,5 +305,18 @@ fn set_registry_run(enable: bool) {
             }
             let _ = RegCloseKey(hkey);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_xml_has_execution_time_limit_and_battery_settings() {
+        assert!(TASK_XML_TEMPLATE.contains("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>"));
+        assert!(
+            TASK_XML_TEMPLATE.contains("<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>")
+        );
     }
 }

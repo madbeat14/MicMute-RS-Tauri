@@ -5,6 +5,10 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
+/// Serialises all config writers so concurrent saves cannot interleave and
+/// corrupt or lose settings. Lock order is always SAVE_LOCK → config.
+pub(crate) static SAVE_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
 fn default_theme() -> String {
     "Auto".to_string()
 }
@@ -348,7 +352,15 @@ impl AppConfig {
         config
     }
 
+    /// Persist this config, serialised against other writers via [`SAVE_LOCK`].
     pub fn save(&self) -> Result<(), String> {
+        let _guard = SAVE_LOCK.lock();
+        self.write_to_disk()
+    }
+
+    /// Write this config to disk without taking [`SAVE_LOCK`].
+    /// Callers must already hold the lock (see [`crate::persist_config`]).
+    pub(crate) fn write_to_disk(&self) -> Result<(), String> {
         let path =
             Self::get_config_path().ok_or_else(|| "Could not determine config path".to_string())?;
         let json = serde_json::to_string_pretty(self)

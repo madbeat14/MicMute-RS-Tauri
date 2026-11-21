@@ -29,9 +29,39 @@ static HOOK_HANDLE: AtomicIsize = AtomicIsize::new(0);
 
 static TARGET_VKS: [AtomicU32; 3] = [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)];
 
+/// Whether each target VK is currently held down. Prevents Windows
+/// auto-repeat key-downs from firing the action repeatedly.
+static KEY_HELD: [AtomicBool; 3] =
+    [AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(false)];
+
+/// GetTickCount (ms) of the most recent key-down event (including repeats)
+/// per target. Lets a missed key-up self-heal via [`STALE_HOLD_MS`].
+static KEY_LAST_DOWN_TICK: [AtomicU32; 3] =
+    [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)];
+
+/// Windows' maximum initial auto-repeat delay is 1000 ms and its slowest
+/// repeat interval is ~400 ms, so any real hold produces a key-down at least
+/// every 1000 ms. A longer gap means the key-up was lost.
+const STALE_HOLD_MS: u32 = 1100;
+
 /// Tick count (ms) of the last VK sent by the LL hook callback.
 /// Used to deduplicate if both LL hook and RegisterHotKey fire for the same keypress.
 static LAST_LL_SEND_TICK: AtomicU32 = AtomicU32::new(0);
+
+/// Decide whether a key event should fire the hotkey action.
+/// Returns `true` for the first key-down after a key-up, or when the previous
+/// key-down is older than [`STALE_HOLD_MS`] (a missed key-up). A key-up resets
+/// the held flag and never fires itself.
+fn should_fire(held: &AtomicBool, last_down: &AtomicU32, is_down: bool, now: u32) -> bool {
+    if is_down {
+        let prev = last_down.swap(now, Ordering::SeqCst);
+        let was_held = held.swap(true, Ordering::SeqCst);
+        !was_held || now.wrapping_sub(prev) > STALE_HOLD_MS
+    } else {
+        held.store(false, Ordering::SeqCst);
+        false
+    }
+}
 
 pub struct HotkeyManager {
     receiver: Receiver<u32>,
@@ -126,6 +156,9 @@ impl HotkeyManager {
         for i in 0..3 {
             let val = if i < vks.len() { vks[i] } else { 0 };
             TARGET_VKS[i].store(val, Ordering::SeqCst);
+            // New bindings must not inherit a stale "held" state.
+            KEY_HELD[i].store(false, Ordering::SeqCst);
+            KEY_LAST_DOWN_TICK[i].store(0, Ordering::SeqCst);
         }
         // Tell hook thread to update RegisterHotKey registrations
         let tid = HOOK_THREAD_ID.load(Ordering::SeqCst);
@@ -224,21 +257,35 @@ unsafe extern "system" fn hook_callback(n_code: i32, w_param: WPARAM, l_param: L
                         return windows::Win32::Foundation::LRESULT(1);
                     }
                 } else if is_up {
+                    // Recording swallows the key-up; clear any held target so a
+                    // recording session cannot leave a hotkey stuck.
+                    for (i, target_atomic) in TARGET_VKS.iter().enumerate() {
+                        if target_atomic.load(Ordering::SeqCst) == kbd_struct.vkCode {
+                            KEY_HELD[i].store(false, Ordering::SeqCst);
+                        }
+                    }
                     return windows::Win32::Foundation::LRESULT(1);
                 }
             } else {
-                for target_atomic in &TARGET_VKS {
+                let now = unsafe { windows::Win32::System::SystemInformation::GetTickCount() };
+                for (i, target_atomic) in TARGET_VKS.iter().enumerate() {
                     let target = target_atomic.load(Ordering::SeqCst);
                     if target != 0 && kbd_struct.vkCode == target {
-                        if is_down
-                            && let Some(sender) = HOTKEY_SENDER.get() {
-                                let _ = sender.send(kbd_struct.vkCode);
-                                // Record tick for dedup with RegisterHotKey backup
-                                let tick = unsafe {
-                                    windows::Win32::System::SystemInformation::GetTickCount()
-                                };
-                                LAST_LL_SEND_TICK.store(tick, Ordering::SeqCst);
-                            }
+                        let fire = should_fire(
+                            &KEY_HELD[i],
+                            &KEY_LAST_DOWN_TICK[i],
+                            is_down,
+                            now,
+                        );
+                        if is_down {
+                            // Keep the RegisterHotKey backup suppressed for the whole
+                            // hold — including auto-repeat key-downs, which do not fire.
+                            LAST_LL_SEND_TICK.store(now, Ordering::SeqCst);
+                            if fire
+                                && let Some(sender) = HOTKEY_SENDER.get() {
+                                    let _ = sender.send(kbd_struct.vkCode);
+                                }
+                        }
                         return windows::Win32::Foundation::LRESULT(1);
                     }
                 }
@@ -280,5 +327,68 @@ fn sync_registered_hotkeys() {
             }
         }
         tracing::debug!(count = registered_count, "Backup hotkeys synced");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_should_fire_first_down_only() {
+        let held = AtomicBool::new(false);
+        let last = AtomicU32::new(0);
+        assert!(should_fire(&held, &last, true, 1000));
+        assert!(!should_fire(&held, &last, true, 1030));
+        assert!(!should_fire(&held, &last, true, 1060));
+    }
+
+    #[test]
+    fn test_should_fire_after_release() {
+        let held = AtomicBool::new(false);
+        let last = AtomicU32::new(0);
+        assert!(should_fire(&held, &last, true, 1000));
+        assert!(!should_fire(&held, &last, false, 1050));
+        assert!(should_fire(&held, &last, true, 2000));
+    }
+
+    #[test]
+    fn test_repeat_downs_30ms_apart_do_not_fire() {
+        let held = AtomicBool::new(false);
+        let last = AtomicU32::new(0);
+        assert!(should_fire(&held, &last, true, 5000));
+        assert!(!should_fire(&held, &last, true, 5030));
+        assert!(!should_fire(&held, &last, true, 5060));
+        assert!(!should_fire(&held, &last, true, 5090));
+    }
+
+    #[test]
+    fn test_stale_hold_recovers_without_key_up() {
+        let held = AtomicBool::new(false);
+        let last = AtomicU32::new(0);
+        assert!(should_fire(&held, &last, true, 1000));
+        assert!(should_fire(&held, &last, true, 1000 + STALE_HOLD_MS + 1));
+
+        // Exactly STALE_HOLD_MS is still a normal (non-stale) repeat.
+        let held2 = AtomicBool::new(false);
+        let last2 = AtomicU32::new(0);
+        assert!(should_fire(&held2, &last2, true, 1000));
+        assert!(!should_fire(&held2, &last2, true, 1000 + STALE_HOLD_MS));
+    }
+
+    #[test]
+    fn test_tick_wraparound_repeat_does_not_fire() {
+        let held = AtomicBool::new(false);
+        let last = AtomicU32::new(0);
+        assert!(should_fire(&held, &last, true, u32::MAX - 10));
+        assert!(!should_fire(&held, &last, true, 20));
+    }
+
+    #[test]
+    fn test_should_fire_up_without_down_is_noop() {
+        let held = AtomicBool::new(false);
+        let last = AtomicU32::new(0);
+        assert!(!should_fire(&held, &last, false, 0));
+        assert!(should_fire(&held, &last, true, 10));
     }
 }

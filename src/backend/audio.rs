@@ -36,8 +36,8 @@ impl<T> Drop for CoTaskMemGuard<T> {
 
 use windows::Win32::Media::Audio::Endpoints::{IAudioEndpointVolume, IAudioMeterInformation};
 use windows::Win32::Media::Audio::{
-    AUDCLNT_SHAREMODE_SHARED, IAudioClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
-    eConsole,
+    AUDCLNT_SHAREMODE_SHARED, EDataFlow, IAudioClient, IMMDevice, IMMDeviceEnumerator,
+    MMDeviceEnumerator, eConsole, eRender,
 };
 use windows::Win32::System::Com::{
     CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, STGM_READ,
@@ -63,10 +63,23 @@ pub struct AudioController {
     _audio_client: Option<IAudioClient>,
     _stream: Option<OutputStream>,
     stream_handle: Option<OutputStreamHandle>,
+    /// Core Audio ID of the capture endpoint this controller is bound to.
+    device_id: String,
+    /// True when the controller was opened with `None`, i.e. it follows the
+    /// Windows default capture device.
+    follows_default: bool,
+    /// Default render endpoint captured when the rodio stream was created.
+    render_id: Option<String>,
 }
 
 impl AudioController {
     pub fn new(device_id: Option<&String>) -> Result<Self> {
+        // Remember whether this controller tracks the Windows default device.
+        let follows_default = device_id.is_none();
+
+        // Snapshot the default render endpoint that the output stream is about
+        // to open, so later changes can be detected.
+        let render_id = get_default_endpoint_id(eRender).ok();
         let (opt_stream, opt_handle) = match OutputStream::try_default() {
             Ok((_stream, stream_handle)) => (Some(_stream), Some(stream_handle)),
             Err(e) => {
@@ -92,6 +105,10 @@ impl AudioController {
                 enumerator
                     .GetDefaultAudioEndpoint(windows::Win32::Media::Audio::eCapture, eConsole)?
             };
+
+            let id_pwstr = device.GetId()?;
+            let _id_guard = CoTaskMemGuard(id_pwstr.0);
+            let device_id_string = id_pwstr.to_string()?;
 
             let volume: IAudioEndpointVolume = device.Activate(CLSCTX_ALL, None)?;
             let meter: IAudioMeterInformation = device.Activate(CLSCTX_ALL, None)?;
@@ -130,7 +147,54 @@ impl AudioController {
                 _audio_client: audio_client,
                 _stream: opt_stream,
                 stream_handle: opt_handle,
+                device_id: device_id_string,
+                follows_default,
+                render_id,
             })
+        }
+    }
+
+    /// Core Audio ID of the capture endpoint this controller is bound to.
+    pub fn device_id(&self) -> &str {
+        &self.device_id
+    }
+
+    /// Whether this controller follows the Windows default capture device.
+    pub fn follows_default(&self) -> bool {
+        self.follows_default
+    }
+
+    /// Recreate the rodio output stream when the default render device changed,
+    /// so feedback sounds keep working after an output device switch.
+    pub fn refresh_output_stream_if_changed(&mut self) {
+        let current = match get_default_endpoint_id(eRender) {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::debug!(error = ?e, "Failed to query default render endpoint");
+                return;
+            }
+        };
+        if self.render_id.as_deref() == Some(current.as_str()) {
+            return;
+        }
+
+        tracing::info!(
+            old = ?self.render_id,
+            new = %current,
+            "Default render device changed — recreating output stream"
+        );
+        // Drop the old stream before creating a new one.
+        self._stream = None;
+        self.stream_handle = None;
+        match OutputStream::try_default() {
+            Ok((stream, handle)) => {
+                self._stream = Some(stream);
+                self.stream_handle = Some(handle);
+                self.render_id = Some(current);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to recreate output stream after render device change");
+            }
         }
     }
 
@@ -376,6 +440,19 @@ pub fn play_feedback(
     }
     None
 }
+/// Return the Core Audio ID of the current default endpoint for the given flow.
+pub fn get_default_endpoint_id(flow: EDataFlow) -> Result<String> {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let enumerator: IMMDeviceEnumerator =
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
+        let device = enumerator.GetDefaultAudioEndpoint(flow, eConsole)?;
+        let id_pwstr = device.GetId()?;
+        let _id_guard = CoTaskMemGuard(id_pwstr.0);
+        Ok(id_pwstr.to_string()?)
+    }
+}
+
 pub fn get_audio_devices() -> Result<Vec<(String, String)>> {
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);

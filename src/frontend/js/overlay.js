@@ -9,6 +9,13 @@ let config = null;
 let isMuted = false;
 let vuPollTimer = null;
 let topmostIntervalId = null;
+let themeTimerId = null;
+
+// Last size applied to the native window — avoids redundant setSize IPC calls.
+let lastW = null;
+let lastH = null;
+// Guards against overlapping updateIcon runs applying a stale result.
+let iconSeq = 0;
 
 let unlistenState = null;
 let unlistenConfig = null;
@@ -38,8 +45,10 @@ async function init() {
     // miss the config-update event emitted from setup() during startup.
     if (unlistenState) unlistenState();
     const statePromise = listen("state-update", e => {
+        const mutedChanged = e.payload.is_muted !== isMuted;
         isMuted = e.payload.is_muted;
-        updateIcon();
+        // Re-render only when the mute state actually changes (10 Hz events).
+        if (mutedChanged) updateIcon();
         const dot = document.getElementById("vu-dot");
         if (dot) {
             const myCfg = getMyConfig();
@@ -62,6 +71,9 @@ async function init() {
             if (key) monitorKey = key;
         } catch (_) {}
         updateDragRegion();
+        // A config change must always re-apply the window size.
+        lastW = null;
+        lastH = null;
         updateIcon();
     });
 
@@ -103,6 +115,14 @@ async function init() {
     topmostIntervalId = setInterval(async () => {
         _selfWin.setAlwaysOnTop(true).catch(() => {});
     }, topmostInterval);
+
+    // Re-sample the background for Auto theme once per second instead of on
+    // every (10 Hz) state-update event.
+    if (themeTimerId !== null) clearInterval(themeTimerId);
+    themeTimerId = setInterval(() => {
+        const c = getMyConfig();
+        if (c && c.theme !== "Dark" && c.theme !== "Light") updateIcon();
+    }, 1000);
 
     // Listen for native window-move events (fires for OS drags, programmatic moves, etc.)
     // Debounced because Windows fires onMoved continuously during a drag.
@@ -147,6 +167,7 @@ async function saveCurrentPosition() {
 }
 
 async function updateIcon() {
+    const seq = ++iconSeq;
     const icon = document.getElementById("overlay-icon");
     if (!icon) return;
 
@@ -168,6 +189,8 @@ async function updateIcon() {
             console.error("Failed to get background theme:", e);
             useDarkIcon = window.matchMedia("(prefers-color-scheme: light)").matches;
         }
+        // A newer updateIcon run started while we awaited — its result wins.
+        if (seq !== iconSeq) return;
     }
 
     const opacity = (myCfg.opacity ?? 80) / 100;
@@ -185,10 +208,15 @@ async function updateIcon() {
     icon.style.height = size + "px";
     icon.style.opacity = opacity;
 
-    // Resize window to match icon size (keeps backend and frontend in sync)
+    // Resize window to match icon size (keeps backend and frontend in sync).
+    // Only call setSize when the size actually changed.
     const w = myCfg.show_vu ? size + 30 : size;
-    const { LogicalSize } = window.__TAURI__.window;
-    _selfWin.setSize(new LogicalSize(w, size)).catch(() => {});
+    if (w !== lastW || size !== lastH) {
+        const { LogicalSize } = window.__TAURI__.window;
+        _selfWin.setSize(new LogicalSize(w, size)).catch(() => {});
+        lastW = w;
+        lastH = size;
+    }
 
     const dot = document.getElementById("vu-dot"); 
     if (dot) {
@@ -201,6 +229,7 @@ window.addEventListener("DOMContentLoaded", init);
 // Cleanup all resources on window unload to prevent accumulation
 window.addEventListener("beforeunload", () => {
     if (topmostIntervalId !== null) { clearInterval(topmostIntervalId); topmostIntervalId = null; }
+    if (themeTimerId !== null) { clearInterval(themeTimerId); themeTimerId = null; }
     if (unlistenState) { unlistenState(); unlistenState = null; }
     if (unlistenConfig) { unlistenConfig(); unlistenConfig = null; }
     if (unlistenMoved) { unlistenMoved(); unlistenMoved = null; }

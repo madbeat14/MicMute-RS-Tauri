@@ -255,7 +255,15 @@ pub fn sync_overlay_windows(app: &AppHandle, config: &config::AppConfig, monitor
     let mut sorted: Vec<&MonitorInfo> = monitors.iter().collect();
     sorted.sort_by_key(|m| !m.is_primary);
 
-    let mut map = get_window_monitor_map().lock();
+    // Populate the window→monitor map in one short critical section. The map
+    // lock must never be held while calling window getters/setters, which can
+    // block waiting on the main thread.
+    {
+        let mut map = get_window_monitor_map().lock();
+        for (idx, mon) in sorted.iter().enumerate().take(OVERLAY_LABELS.len()) {
+            map.insert(OVERLAY_LABELS[idx].to_string(), mon.label_key.clone());
+        }
+    }
 
     for (idx, mon) in sorted.iter().enumerate() {
         if idx >= OVERLAY_LABELS.len() {
@@ -263,7 +271,6 @@ pub fn sync_overlay_windows(app: &AppHandle, config: &config::AppConfig, monitor
         }
         let label = OVERLAY_LABELS[idx];
         let key = &mon.label_key;
-        map.insert(label.to_string(), key.clone());
 
         // Strict per-monitor: missing entry or disabled ⇒ hide. Never inherit
         // primary's config — that breaks per-monitor independence.
@@ -333,7 +340,13 @@ pub fn sync_osd_windows(app: &AppHandle, config: &config::AppConfig, monitors: &
     let mut sorted: Vec<&MonitorInfo> = monitors.iter().collect();
     sorted.sort_by_key(|m| !m.is_primary);
 
-    let mut map = get_window_monitor_map().lock();
+    // Populate the map under a short lock; never across window calls.
+    {
+        let mut map = get_window_monitor_map().lock();
+        for (idx, mon) in sorted.iter().enumerate().take(OSD_LABELS.len()) {
+            map.insert(OSD_LABELS[idx].to_string(), mon.label_key.clone());
+        }
+    }
 
     for (idx, mon) in sorted.iter().enumerate() {
         if idx >= OSD_LABELS.len() {
@@ -341,7 +354,6 @@ pub fn sync_osd_windows(app: &AppHandle, config: &config::AppConfig, monitors: &
         }
         let label = OSD_LABELS[idx];
         let key = &mon.label_key;
-        map.insert(label.to_string(), key.clone());
 
         // Strict per-monitor: hide when missing or disabled. No fallback to
         // primary — see sync_overlay_windows for the rationale.
@@ -491,7 +503,8 @@ pub(crate) fn build_tray_menu<M: Manager<tauri::Wry>>(
         "toggle_boot",
         "Start on Boot",
         true,
-        startup::get_run_on_startup(),
+        // Cached value: building the menu must never block on schtasks/UAC.
+        startup::cached_run_on_startup(),
         None::<&str>,
     )?;
 
@@ -534,6 +547,32 @@ pub fn emit_state(app: &AppHandle, is_muted: bool, peak: f32) {
     );
 }
 
+/// Persist the newest config from `state`, serialising concurrent writers.
+/// Always takes `SAVE_LOCK` before the config lock, and never holds the config
+/// lock while writing to disk.
+pub fn persist_config(state: &AppState) -> Result<(), String> {
+    let _guard = config::SAVE_LOCK.lock();
+    let cfg = state.config.lock().clone();
+    cfg.write_to_disk()
+}
+
+/// Refresh cached mute state and device list after a controller swap.
+/// Returns the new controller's current mute state.
+fn resync_after_reconnect(
+    controller: &Option<audio::AudioController>,
+    state: &Arc<AppState>,
+) -> bool {
+    let muted = controller
+        .as_ref()
+        .map(|c| c.is_muted().unwrap_or(false))
+        .unwrap_or(false);
+    *state.is_muted.lock() = muted;
+    if let Ok(devices) = audio::get_audio_devices() {
+        *state.available_devices.lock() = devices;
+    }
+    muted
+}
+
 fn spawn_audio_worker(
     app: AppHandle,
     state: Arc<AppState>,
@@ -573,8 +612,14 @@ fn spawn_audio_worker(
 
             let mut _active_sink: Option<rodio::Sink> = None;
             let mut last_peak_poll = std::time::Instant::now();
+            let mut last_reconnect_attempt = std::time::Instant::now();
+            let mut last_device_check = std::time::Instant::now();
             let mut consecutive_com_errors: u32 = 0;
             const MAX_COM_ERRORS_BEFORE_RECONNECT: u32 = 3;
+            const RECONNECT_INTERVAL: std::time::Duration =
+                std::time::Duration::from_millis(constants::AUDIO_RECONNECT_INTERVAL_MS);
+            const DEVICE_CHECK_INTERVAL: std::time::Duration =
+                std::time::Duration::from_millis(constants::AUDIO_DEVICE_CHECK_INTERVAL_MS);
             let mut current_muted = controller.as_ref().map(|c| c.is_muted().unwrap_or(false)).unwrap_or(false);
             {
                 *state.is_muted.lock() = current_muted;
@@ -617,6 +662,15 @@ fn spawn_audio_worker(
                     Ok(msg) => match msg {
                         AudioMsg::ToggleMute(cfg) => {
                             tracing::info!("Audio worker: received ToggleMute");
+                            // Recover a lost controller first, then fall through to
+                            // the normal toggle path so the first press is not swallowed.
+                            if controller.is_none()
+                                && try_reconnect(&mut controller, &state)
+                            {
+                                consecutive_com_errors = 0;
+                                current_muted = resync_after_reconnect(&controller, &state);
+                                last_tray_muted = None;
+                            }
                             if let Some(ref mut c) = controller {
                                 match c.toggle_mute(&cfg) {
                                     Ok(new_muted) => {
@@ -638,23 +692,25 @@ fn spawn_audio_worker(
                                         if consecutive_com_errors >= MAX_COM_ERRORS_BEFORE_RECONNECT
                                             && try_reconnect(&mut controller, &state) {
                                                 consecutive_com_errors = 0;
-                                                current_muted = controller.as_ref().map(|c| c.is_muted().unwrap_or(false)).unwrap_or(false);
-                                                *state.is_muted.lock() = current_muted;
+                                                current_muted = resync_after_reconnect(&controller, &state);
                                                 last_tray_muted = None; // force tray sync on next poll
                                         }
                                     }
                                 }
                             } else {
-                                tracing::error!("Audio worker: ToggleMute received but controller is None — attempting reconnect");
-                                if try_reconnect(&mut controller, &state) {
-                                    consecutive_com_errors = 0;
-                                    current_muted = controller.as_ref().map(|c| c.is_muted().unwrap_or(false)).unwrap_or(false);
-                                    *state.is_muted.lock() = current_muted;
-                                    last_tray_muted = None; // force tray sync on next poll
-                                }
+                                tracing::error!("Audio worker: ToggleMute received but controller is unavailable");
                             }
                         }
                         AudioMsg::SetMute(mute, cfg) => {
+                            // Recover a lost controller first, then continue into
+                            // the normal set path in the same message.
+                            if controller.is_none()
+                                && try_reconnect(&mut controller, &state)
+                            {
+                                consecutive_com_errors = 0;
+                                current_muted = resync_after_reconnect(&controller, &state);
+                                last_tray_muted = None;
+                            }
                             if let Some(ref mut c) = controller {
                                 match c.set_mute(mute, &cfg) {
                                     Ok(()) => {
@@ -675,6 +731,8 @@ fn spawn_audio_worker(
                                         }
                                     }
                                 }
+                            } else {
+                                tracing::error!("Audio worker: SetMute received but controller is unavailable");
                             }
                         }
                         AudioMsg::SetDevice(id) => {
@@ -682,12 +740,8 @@ fn spawn_audio_worker(
                                 Ok(new_ctrl) => {
                                     controller = Some(new_ctrl);
                                     consecutive_com_errors = 0;
-                                    current_muted = controller.as_ref().map(|c| c.is_muted().unwrap_or(false)).unwrap_or(false);
-                                    *state.is_muted.lock() = current_muted;
+                                    current_muted = resync_after_reconnect(&controller, &state);
                                     last_tray_muted = None; // force tray sync on next poll after device switch
-                                    if let Ok(devices) = audio::get_audio_devices() {
-                                        *state.available_devices.lock() = devices;
-                                    }
                                 }
                                 Err(e) => {
                                     tracing::error!(error = ?e, "Audio worker: SetDevice failed");
@@ -717,6 +771,73 @@ fn spawn_audio_worker(
                         }
                     },
                     Err(std_mpsc::RecvTimeoutError::Timeout) => {
+                        // Recover a lost controller every RECONNECT_INTERVAL.
+                        if controller.is_none()
+                            && last_reconnect_attempt.elapsed() >= RECONNECT_INTERVAL
+                        {
+                            last_reconnect_attempt = std::time::Instant::now();
+                            tracing::warn!(
+                                "Audio worker: controller is None — attempting periodic reconnect"
+                            );
+                            if try_reconnect(&mut controller, &state) {
+                                consecutive_com_errors = 0;
+                                current_muted = resync_after_reconnect(&controller, &state);
+                                last_tray_muted = None;
+                            }
+                        }
+
+                        // Follow default render/capture device changes every
+                        // DEVICE_CHECK_INTERVAL (~2s).
+                        if controller.is_some()
+                            && last_device_check.elapsed() >= DEVICE_CHECK_INTERVAL
+                        {
+                            last_device_check = std::time::Instant::now();
+
+                            if let Some(c) = controller.as_mut() {
+                                c.refresh_output_stream_if_changed();
+                            }
+
+                            let default_capture_id = match audio::get_default_endpoint_id(
+                                windows::Win32::Media::Audio::eCapture,
+                            ) {
+                                Ok(id) => Some(id),
+                                Err(e) => {
+                                    tracing::debug!(error = ?e, "Audio worker: failed to query default capture endpoint");
+                                    None
+                                }
+                            };
+                            let capture_changed_to = match (controller.as_ref(), default_capture_id)
+                            {
+                                (Some(c), Some(id))
+                                    if c.follows_default() && c.device_id() != id.as_str() =>
+                                {
+                                    Some(id)
+                                }
+                                _ => None,
+                            };
+
+                            if let Some(default_id) = capture_changed_to {
+                                tracing::info!(
+                                    device_id = %default_id,
+                                    "Audio worker: default capture device changed — rebuilding controller"
+                                );
+                                // No sink may outlive the stream it was created on.
+                                _active_sink = None;
+                                match audio::AudioController::new(None) {
+                                    Ok(new_ctrl) => {
+                                        controller = Some(new_ctrl);
+                                        consecutive_com_errors = 0;
+                                        current_muted =
+                                            resync_after_reconnect(&controller, &state);
+                                        last_tray_muted = None;
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(error = ?e, "Audio worker: rebuild after default device change failed");
+                                    }
+                                }
+                            }
+                        }
+
                         // Periodic peak level polling (~10Hz)
                         if last_peak_poll.elapsed() >= std::time::Duration::from_millis(100) {
                             if let Some(ref c) = controller {
@@ -754,8 +875,7 @@ fn spawn_audio_worker(
                                             tracing::warn!("Audio worker: repeated peak poll failures — reconnecting");
                                             if try_reconnect(&mut controller, &state) {
                                                 consecutive_com_errors = 0;
-                                                current_muted = controller.as_ref().map(|c| c.is_muted().unwrap_or(false)).unwrap_or(false);
-                                                *state.is_muted.lock() = current_muted;
+                                                current_muted = resync_after_reconnect(&controller, &state);
                                                 last_tray_muted = None; // force tray sync on next poll
                                             }
                                         }
@@ -1085,6 +1205,18 @@ pub fn run() {
 
                 *state.tray.lock() = Some(tray);
 
+                // Fill the startup-state cache off the main thread, then rebuild
+                // the tray menu (build_tray_menu uses the cached value).
+                {
+                    let boot_app = app.handle().clone();
+                    let boot_state = Arc::clone(&state);
+                    std::thread::spawn(move || {
+                        startup::get_run_on_startup();
+                        let cfg = boot_state.config.lock().clone();
+                        sync_tray_and_emit(&boot_app, &boot_state, &cfg);
+                    });
+                }
+
                 // Register global event handlers on the App — builder-level callbacks
                 // are not reliably invoked in Tauri 2.10.x/tao 0.34.x on Windows.
                 {
@@ -1138,7 +1270,7 @@ pub fn run() {
                     }
                     if cfg_dirty {
                         *state.config.lock() = cfg.clone();
-                        if let Err(e) = cfg.save() {
+                        if let Err(e) = persist_config(&state) {
                             tracing::error!(error = %e, "Failed to save auto-populated monitor configs");
                         }
                     }
@@ -1366,7 +1498,7 @@ fn handle_tray_event(app: &AppHandle, id: &str, state: &Arc<AppState>) {
                 cfg.beep_enabled = !cfg.beep_enabled;
                 cfg.clone()
             };
-            if let Err(e) = cfg.save() {
+            if let Err(e) = persist_config(state) {
                 tracing::error!("{}", e);
             }
             sync_tray_and_emit(app, state, &cfg);
@@ -1380,7 +1512,7 @@ fn handle_tray_event(app: &AppHandle, id: &str, state: &Arc<AppState>) {
                 }
                 cfg.clone()
             };
-            if let Err(e) = cfg.save() {
+            if let Err(e) = persist_config(state) {
                 tracing::error!("{}", e);
             }
             // OSD windows are shown on-demand; no sync needed here
@@ -1395,23 +1527,33 @@ fn handle_tray_event(app: &AppHandle, id: &str, state: &Arc<AppState>) {
                 }
                 cfg.clone()
             };
-            if let Err(e) = cfg.save() {
-                tracing::error!("{}", e);
-            }
             // Show/hide all static overlay windows
             let monitors = get_monitor_info(app);
             sync_overlay_windows(app, &cfg, &monitors);
-            sync_tray_and_emit(app, state, &cfg);
+            // sync_overlay_windows writes computed preset coordinates back into
+            // state, so persist and emit the config read back after the sync.
+            let final_cfg = state.config.lock().clone();
+            if let Err(e) = persist_config(state) {
+                tracing::error!("{}", e);
+            }
+            sync_tray_and_emit(app, state, &final_cfg);
         }
 
         "toggle_boot" => {
-            let current = startup::get_run_on_startup();
-            startup::set_run_on_startup(!current);
-            let actual = startup::get_run_on_startup();
-            let cfg = state.config.lock().clone();
-            sync_tray_and_emit(app, state, &cfg);
-            // Notify settings UI so its checkbox stays in sync
-            let _ = app.emit("startup-changed", serde_json::json!({ "enabled": actual }));
+            // schtasks / UAC prompts can block for seconds — never run on the
+            // main thread. Do the work on a dedicated thread.
+            let boot_app = app.clone();
+            let boot_state = Arc::clone(state);
+            std::thread::spawn(move || {
+                let current = startup::get_run_on_startup();
+                startup::set_run_on_startup(!current);
+                let actual = startup::get_run_on_startup();
+                let cfg = boot_state.config.lock().clone();
+                sync_tray_and_emit(&boot_app, &boot_state, &cfg);
+                // Notify settings UI so its checkbox stays in sync
+                let _ = boot_app
+                    .emit("startup-changed", serde_json::json!({ "enabled": actual }));
+            });
         }
         "settings" => {
             tracing::info!("Settings menu item clicked");
@@ -1447,7 +1589,7 @@ fn handle_tray_event(app: &AppHandle, id: &str, state: &Arc<AppState>) {
                 cfg.device_id = new_device_id.clone();
                 cfg.clone()
             };
-            if let Err(e) = cfg.save() {
+            if let Err(e) = persist_config(state) {
                 tracing::error!("{}", e);
             }
             let _ = state.audio_tx.try_send(AudioMsg::SetDevice(new_device_id));

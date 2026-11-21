@@ -100,9 +100,6 @@ pub async fn update_config(
         }
         *cfg = new_config.clone();
     }
-    if let Err(e) = new_config.save() {
-        tracing::error!("{}", e);
-    }
 
     // Update hotkeys — register ALL configured VKs regardless of mode.
     // The hook must always consume the key (prevent pass-through to Windows).
@@ -130,25 +127,20 @@ pub async fn update_config(
     // which works from a background thread but deadlocks inside run_on_main_thread.
     let monitors = crate::get_monitor_info(&app);
 
-    // Rebuild tray menu checkmarks
-    if let Some(tray) = app.tray_by_id("main") {
-        let devices = state.available_devices.lock().clone();
-        if let Ok(menu) = crate::build_tray_menu(&app, &new_config, &devices) {
-            let _ = tray.set_menu(Some(menu));
-        }
-    }
-
     crate::sync_overlay_windows(&app, &new_config, &monitors);
     crate::sync_osd_windows(&app, &new_config, &monitors);
 
-    // Emit config update to all frontend windows
-    use tauri::Emitter;
-    let _ = app.emit(
-        "config-update",
-        serde_json::json!({
-            "config": new_config
-        }),
-    );
+    // sync_overlay_windows writes computed preset coordinates back into state,
+    // so persist and emit the config read back after the sync. Using the stale
+    // input here made position presets flip back to "Custom" on the next save.
+    let final_cfg = state.config.lock().clone();
+
+    if let Err(e) = crate::persist_config(&state) {
+        tracing::error!("{}", e);
+    }
+
+    // Rebuild tray checkmarks and emit config-update with the final config
+    crate::sync_tray_and_emit(&app, &state, &final_cfg);
 
     Ok(())
 }
@@ -185,15 +177,22 @@ pub async fn get_cached_devices(
 /// Switch the active audio device.
 #[tauri::command]
 pub async fn set_device(
+    app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
     device_id: Option<String>,
 ) -> Result<(), CommandError> {
     let _ = state.audio_tx.try_send(AudioMsg::SetDevice(device_id.clone()));
-    let mut cfg = state.config.lock();
-    cfg.device_id = device_id;
-    if let Err(e) = cfg.save() {
+    // Update the field in a short critical section, then persist without
+    // holding the config lock.
+    {
+        let mut cfg = state.config.lock();
+        cfg.device_id = device_id;
+    }
+    if let Err(e) = crate::persist_config(&state) {
         tracing::error!("{}", e);
     }
+    let cfg = state.config.lock().clone();
+    crate::sync_tray_and_emit(&app, &state, &cfg);
     Ok(())
 }
 
@@ -387,7 +386,7 @@ pub async fn save_overlay_position(
         }
         cfg.clone()
     };
-    if let Err(e) = cfg_to_save.save() {
+    if let Err(e) = crate::persist_config(&state) {
         tracing::error!("{}", e);
     }
     use tauri::Emitter;
@@ -405,7 +404,8 @@ pub async fn get_monitors(app: tauri::AppHandle) -> Result<Vec<crate::MonitorInf
 
 /// Return the monitor config key assigned to a given window label.
 /// Used by overlay.js to determine which per-monitor config entry applies.
+/// Async so it never runs on (and blocks) the main thread.
 #[tauri::command]
-pub fn get_window_monitor_key(label: String) -> Option<String> {
-    crate::window_monitor_key(&label)
+pub async fn get_window_monitor_key(label: String) -> Result<Option<String>, CommandError> {
+    Ok(crate::window_monitor_key(&label))
 }
